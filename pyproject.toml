@@ -1,0 +1,31 @@
+[project]
+name = "test-automation-sdk-mcp"
+version = "0.1.0"
+description = "MCP Server for Test Automation SDK - Provides RAG-based documentation"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+dependencies = ["mcp[cli]>=2.0.0", "numpy>=2.0.0", "pydantic>=2.0.0"]
+
+[project.scripts]
+test-automation-sdk-mcp = "test_automation_sdk_mcp:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.21.0",
+    "pyright>=1.1.390",
+    "pytest>=9.1.1",
+    "ruff>=0.16.1",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.pyright]
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+markers = ["ollama: tests that require a running Ollama embedding endpoint"]
