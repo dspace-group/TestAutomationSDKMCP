@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "MCP Server for Test Automation SDK - Provides RAG-based documentation"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
-dependencies = ["mcp[cli]>=2.0.0", "numpy>=2.0.0", "pydantic>=2.0.0"]
+dependencies = [
+    "httpx>=0.28.0",
+    "mcp[cli]>=2.0.0",
+    "numpy>=2.0.0",
+    "pydantic>=2.0.0",
+]
 
 [project.scripts]
 test-automation-sdk-mcp = "test_automation_sdk_mcp:main"
