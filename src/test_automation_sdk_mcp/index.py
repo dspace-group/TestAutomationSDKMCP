@@ -2,7 +2,10 @@
 
 import hmac
 import json
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any
 
@@ -132,6 +135,25 @@ def load_verified_artifacts(directory: Path) -> LoadedArtifacts:
     return LoadedArtifacts(index=index, documents=documents, manifest=manifest, paths=paths)
 
 
+@contextmanager
+def packaged_artifact_paths() -> Generator[ArtifactPaths, None, None]:
+    """Resolve packaged artifacts through importlib.resources."""
+
+    try:
+        resource_directory = files("test_automation_sdk_mcp").joinpath("db")
+        with as_file(resource_directory) as directory:
+            yield artifact_paths(directory)
+    except (FileNotFoundError, OSError, TypeError, ValueError) as error:
+        raise ArtifactError("Packaged documentation artifacts are unavailable.") from error
+
+
+def load_packaged_artifacts() -> LoadedArtifacts:
+    """Load and validate the artifact generation bundled with the package."""
+
+    with packaged_artifact_paths() as paths:
+        return load_verified_artifacts(paths.directory)
+
+
 def load_artifact_set(directory: Path) -> LoadedArtifacts:
     """Compatibility name for the verified runtime artifact loader."""
 
@@ -146,7 +168,9 @@ __all__ = [
     "LoadedArtifacts",
     "artifact_paths",
     "load_artifact_set",
+    "load_packaged_artifacts",
     "load_verified_artifacts",
+    "packaged_artifact_paths",
     "validate_faiss_index",
     "write_document_store",
     "write_index_manifest",

@@ -21,6 +21,9 @@ test-automation-sdk-mcp-build-index = "test_automation_sdk_mcp.build_index:main"
 requires = ["uv_build>=0.12.1,<0.13.0"]
 build-backend = "uv_build"
 
+[tool.uv.build-backend]
+source-include = ["src/test_automation_sdk_mcp/db/**"]
+
 [dependency-groups]
 dev = [
     "pyinstaller>=6.21.0",
@@ -36,4 +39,7 @@ line-length = 120
 typeCheckingMode = "strict"
 
 [tool.pytest.ini_options]
-markers = ["ollama: tests that require a running Ollama embedding endpoint"]
+markers = [
+    "ollama: tests that require a running Ollama embedding endpoint",
+    "release: tests that build and validate a release installation",
+]

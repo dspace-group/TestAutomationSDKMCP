@@ -16,10 +16,10 @@ from mcp.types import ToolAnnotations
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from .config import RuntimeConfig
+from .config import DEFAULT_ARTIFACT_DIRECTORY, RuntimeConfig
 from .documents import EMBEDDING_DIMENSION
 from .errors import ConfigurationError, RetrievalError, TestAutomationSDKError
-from .index import LoadedArtifacts, load_verified_artifacts
+from .index import LoadedArtifacts, load_packaged_artifacts, load_verified_artifacts
 from .ollama import EmbeddingProvider, OllamaEmbeddingProvider
 
 MAX_QUERY_LENGTH = 4_000
@@ -241,7 +241,12 @@ def create_server(
     runtime_config = RuntimeConfig.from_environment() if config is None else config
     if provider is not None and provider_factory is not None:
         raise ConfigurationError("provider and provider_factory cannot both be configured.")
-    loaded_artifacts = load_verified_artifacts(runtime_config.artifact_directory) if artifacts is None else artifacts
+    if artifacts is not None:
+        loaded_artifacts = artifacts
+    elif runtime_config.artifact_directory == DEFAULT_ARTIFACT_DIRECTORY:
+        loaded_artifacts = load_packaged_artifacts()
+    else:
+        loaded_artifacts = load_verified_artifacts(runtime_config.artifact_directory)
     if loaded_artifacts.manifest.embedding_model != runtime_config.model:
         raise ConfigurationError("Configured embedding model does not match the documentation index.")
     factory = _default_provider_factory if provider_factory is None else provider_factory
