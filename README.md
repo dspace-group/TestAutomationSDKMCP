@@ -154,6 +154,19 @@ when supplied, and return one finite 768-value vector for each input.
 
 ## Maintainer Index Rebuild
 
+Before rebuilding, obtain the latest generated HTML documentation export,
+including its `search.json`, and copy the complete tree into a new `data/`
+folder at the repository root. Preserve all relative paths; the builder needs
+the HTML pages and `search.json` to have matching coverage:
+
+```powershell
+New-Item -ItemType Directory -Force .\data | Out-Null
+Copy-Item -Path C:\path\to\latest\html-docs\* -Destination .\data -Recurse -Force
+```
+
+The `data/` folder is ignored by Git and is only a local input to the index
+builder. Do not commit it.
+
 The committed index was built from the complete `data/` tree with
 `nomic-embed-text:v1.5`. Rebuild it only when the source documentation or
 embedding model changes:
