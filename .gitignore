@@ -2,6 +2,7 @@ data/
 .ruff_cache/
 .pytest_cache/
 uv.lock
+THIRD_PARTY_LICENSES.txt
 
 # Python-generated files
 __pycache__/

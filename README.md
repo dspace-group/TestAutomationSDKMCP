@@ -79,6 +79,30 @@ The runtime discovers the default artifact set through
 `TA_SDK_DB_DIR` only when selecting an alternate, fully validated artifact
 directory.
 
+### Release Assets and Checksums
+
+Pushing a tag matching `v*` runs the release workflow. Each GitHub release
+publishes the wheel, source `tar.gz`, a release zip, and `SHA256SUMS.txt`. The
+release zip contains the wheel, source archive, and `license.txt` generated
+from the project's installed dependencies.
+
+On Linux or macOS, download the release assets into the same directory and
+verify them with:
+
+```text
+sha256sum -c SHA256SUMS.txt
+```
+
+On Windows, calculate an individual asset's SHA-256 value with PowerShell:
+
+```powershell
+Get-FileHash .\test_automation_sdk_mcp-0.1.0-py3-none-any.whl -Algorithm SHA256
+```
+
+Compare the result with the corresponding entry in `SHA256SUMS.txt`.
+Checksums detect corruption or altered downloads; signed releases or artifact
+attestations are needed when publisher authenticity must also be verified.
+
 ## MCP Client Configuration
 
 Configure an MCP client with the installed console script. The exact JSON
