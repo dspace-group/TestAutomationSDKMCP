@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Sequence
 from hashlib import sha256
+from importlib.metadata import version
 from pathlib import Path
 
 import faiss
@@ -292,17 +293,18 @@ def test_client_session_invokes_typed_tool_over_in_memory_transport(tmp_path: Pa
         provider=provider,
     )
 
-    async def exercise() -> tuple[object, bool]:
+    async def exercise() -> tuple[object, bool, str]:
         async with (
             InMemoryTransport(server) as (read_stream, write_stream),
             ClientSession(read_stream, write_stream) as session,
         ):
-            await session.initialize()
+            initialization = await session.initialize()
             result = await session.call_tool("retrieve_documentation", {"query": "query"})
-            return result.structured_content, result.is_error
+            return result.structured_content, result.is_error, initialization.server_info.version
 
-    structured_content, is_error = run(exercise())
+    structured_content, is_error, server_version = run(exercise())
     assert is_error is False
+    assert server_version == version("test-automation-sdk-mcp")
     assert structured_content == {
         "result": [
             {

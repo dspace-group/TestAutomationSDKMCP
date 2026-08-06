@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from importlib.metadata import version
 from math import isfinite
 from pathlib import Path
 from typing import Annotated, Protocol, cast, runtime_checkable
@@ -300,6 +301,7 @@ def create_server(
         name="Test Automation SDK",
         description="Authoritative documentation retrieval for the Test Automation SDK and SDK-based test development.",
         instructions=SERVER_INSTRUCTIONS,
+        version=version("test-automation-sdk-mcp"),
         lifespan=lifespan,
     )
 
