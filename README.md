@@ -21,7 +21,7 @@ ollama pull nomic-embed-text:v1.5
 ```
 
 The server uses Ollama's `/api/embed` endpoint. `ollama pull` installs the
-model; the MCP server connects to the configured service directly.
+model. The MCP server connects to the configured service directly.
 
 ## Installation
 
@@ -82,7 +82,7 @@ directory.
 ## MCP Client Configuration
 
 Configure an MCP client with the installed console script. The exact JSON
-location depends on the client; the stdio server entry has this shape:
+location depends on the client. The stdio server entry has this shape:
 
 ```json
 {
@@ -101,7 +101,7 @@ location depends on the client; the stdio server entry has this shape:
 
 On Windows, use the full path to
 `<venv>\Scripts\test-automation-sdk-mcp.exe` when the virtual environment is
-not active. The server writes protocol messages to stdout; startup progress
+not active. The server writes protocol messages to stdout. Startup progress
 and errors go to stderr.
 
 For a repository checkout, use the absolute path to `SDKMCP.cmd` on Windows or
@@ -124,7 +124,7 @@ All settings are read when the server or index builder starts:
 
 When `TA_SDK_OLLAMA_API_KEY` is set, requests contain
 `Authorization: Bearer <value>`. The key is never logged or included in error
-messages. Do not put secrets in a committed client configuration file; use the
+messages. Do not put secrets in a committed client configuration file. Use the
 client's environment or secret-management facility.
 
 The text supplied to `retrieve_documentation` is sent as the `input` value in a
@@ -169,8 +169,7 @@ uv run test-automation-sdk-mcp-build-index `
 The builder validates source coverage, chunks deterministically, embeds in
 batches, validates all vectors, reloads the staged artifacts, and publishes the
 three files together. The manifest records the model, 768 dimensions, L2
-metric, document count, and SHA-256 hashes. Review all three generated files;
-do not add `TA_Docu.pkl` or any other pickle database.
+metric, document count, and SHA-256 hashes. Review all three generated files.
 
 ## Tests and Wheel Validation
 
