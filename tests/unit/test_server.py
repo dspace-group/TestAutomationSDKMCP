@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Sequence
 from hashlib import sha256
 from importlib.metadata import version
@@ -15,6 +16,7 @@ from mcp.shared.exceptions import MCPError
 from numpy.typing import NDArray
 from pydantic import ValidationError
 
+from test_automation_sdk_mcp import main as server_main
 from test_automation_sdk_mcp.build_index import build_index
 from test_automation_sdk_mcp.config import RuntimeConfig
 from test_automation_sdk_mcp.documents import ChunkingManifest, DocumentRecord, DocumentStore, IndexManifest
@@ -507,3 +509,29 @@ def test_provider_factory_is_created_once_and_serves_in_process_calls(tmp_path: 
     assert len(providers) == 1
     assert providers[0].closed
     assert result.structured_content is not None  # type: ignore[union-attr]
+
+
+def test_stdio_entrypoint_uses_single_line_human_logging(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class FakeServer:
+        settings = type("Settings", (), {"log_level": "INFO"})()
+
+        def run(self, *, transport: str) -> None:
+            assert transport == "stdio"
+            logging.getLogger("httpx").info("HTTP Request: POST %s", "http://embedding.example.test/" + "x" * 200)
+            logging.getLogger("test.warning").warning("warning with\nembedded line")
+
+    monkeypatch.setattr("test_automation_sdk_mcp.create_server", lambda: FakeServer())
+    root_logger = logging.getLogger()
+    previous_handlers = root_logger.handlers[:]
+    previous_level = root_logger.level
+    try:
+        assert server_main() == 0
+        output = capsys.readouterr().err
+        assert "INFO httpx: HTTP Request: POST" in output
+        assert "WARNING test.warning: warning with\\nembedded line" in output
+        assert len(output.splitlines()) == 2
+    finally:
+        root_logger.handlers = previous_handlers
+        root_logger.setLevel(previous_level)
