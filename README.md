@@ -224,6 +224,36 @@ contains no non-MCP text. Use the same clean environment and configure
 
 ## Troubleshooting
 
+Expected `retrieve_documentation` failures are native MCP/JSON-RPC errors with
+JSON-RPC code `-32000`, a safe human-readable message, and this versioned
+`data` envelope:
+
+```json
+{
+	"schema_version": 1,
+	"code": "embedding_service_unavailable",
+	"classification": "transient",
+	"retryable": true
+}
+```
+
+| Application code                     | Classification | Meaning                                                   |
+| ------------------------------------ | -------------- | --------------------------------------------------------- |
+| `invalid_query`                      | permanent      | The query is empty, oversized, or otherwise invalid.      |
+| `embedding_request_timed_out`        | transient      | The embedding request exceeded its timeout.               |
+| `embedding_service_unavailable`      | transient      | The embedding endpoint could not be reached.              |
+| `embedding_service_rejected_request` | permanent      | The endpoint rejected a non-retryable request.            |
+| `embedding_service_failure`          | transient      | The endpoint returned a retryable failure.                |
+| `embedding_response_invalid`         | permanent      | The response violates the embedding contract.             |
+| `retrieval_failed`                   | permanent      | The index or search result violates retrieval invariants. |
+| `tool_output_invalid`                | permanent      | A snippet violates the public success schema.             |
+| `server_runtime_unavailable`         | transient      | The server lifecycle context is temporarily unavailable.  |
+
+Retry only errors classified as `transient`, using bounded backoff. For a
+`permanent` error, change the query or configuration before retrying. Startup
+configuration and artifact failures occur before an MCP session exists; they
+are reported on stderr and are not MCP tool errors.
+
 **Endpoint or connection errors**
 
 - Set `TA_SDK_OLLAMA_URL` to the base URL, without `/api/embed`.

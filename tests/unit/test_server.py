@@ -11,12 +11,20 @@ import pytest
 from mcp.client._memory import InMemoryTransport
 from mcp.client.session import ClientSession
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.shared.exceptions import MCPError
 from numpy.typing import NDArray
+from pydantic import ValidationError
 
 from test_automation_sdk_mcp.build_index import build_index
 from test_automation_sdk_mcp.config import RuntimeConfig
 from test_automation_sdk_mcp.documents import ChunkingManifest, DocumentRecord, DocumentStore, IndexManifest
-from test_automation_sdk_mcp.errors import ConfigurationError, EmbeddingError, RetrievalError
+from test_automation_sdk_mcp.errors import (
+    TOOL_EXECUTION_ERROR,
+    ApplicationErrorCode,
+    ConfigurationError,
+    EmbeddingError,
+    RetrievalError,
+)
 from test_automation_sdk_mcp.index import ArtifactPaths, LoadedArtifacts
 from test_automation_sdk_mcp.server import (
     MAX_QUERY_LENGTH,
@@ -123,8 +131,9 @@ def test_retrieval_maps_nearest_rows_and_bounds_result_count(tmp_path: Path) -> 
 def test_retrieval_rejects_invalid_faiss_row_ids(tmp_path: Path, row_id: int) -> None:
     retriever, _ = make_retriever(tmp_path, FakeSearchIndex(row_id))
 
-    with pytest.raises(RetrievalError, match="invalid row ID"):
+    with pytest.raises(RetrievalError, match="invalid row ID") as raised:
         run(retriever.retrieve("query"))
+    assert raised.value.code is ApplicationErrorCode.RETRIEVAL_FAILED
 
 
 @pytest.mark.parametrize(
@@ -134,8 +143,9 @@ def test_retrieval_rejects_invalid_faiss_row_ids(tmp_path: Path, row_id: int) ->
 def test_retrieval_rejects_invalid_queries(tmp_path: Path, query: str) -> None:
     retriever, _ = make_retriever(tmp_path)
 
-    with pytest.raises(RetrievalError, match="query"):
+    with pytest.raises(RetrievalError, match="query") as raised:
         run(retriever.retrieve(query))
+    assert raised.value.code is ApplicationErrorCode.INVALID_QUERY
 
 
 def test_server_exposes_one_strict_annotated_structured_tool(tmp_path: Path) -> None:
@@ -149,6 +159,16 @@ def test_server_exposes_one_strict_annotated_structured_tool(tmp_path: Path) -> 
     assert server.instructions == SERVER_INSTRUCTIONS
     assert tool.name == "retrieve_documentation"  # type: ignore[union-attr]
     assert tool.description == TOOL_DESCRIPTION  # type: ignore[union-attr]
+    for code in ApplicationErrorCode:
+        assert code.value in tool.description  # type: ignore[operator]
+    for declared_term in (
+        "verified packaged artifacts",
+        "/api/embed",
+        "nearest-first",
+        "uncalibrated",
+        "bounded backoff",
+    ):
+        assert declared_term in tool.description  # type: ignore[operator]
     assert tool.input_schema["required"] == ["query"]  # type: ignore[union-attr]
     assert tool.input_schema["properties"]["query"]["type"] == "string"  # type: ignore[union-attr]
     assert "self-contained Test Automation SDK question" in tool.input_schema["properties"]["query"]["description"]  # type: ignore[union-attr]
@@ -190,20 +210,31 @@ def test_server_exposes_one_strict_annotated_structured_tool(tmp_path: Path) -> 
     "query, message",
     [("", "must not be empty"), ("x" * (MAX_QUERY_LENGTH + 1), "at most")],
 )
-def test_tool_translates_query_errors_to_safe_tool_errors(tmp_path: Path, query: str, message: str) -> None:
+def test_tool_translates_query_errors_to_native_mcp_errors(tmp_path: Path, query: str, message: str) -> None:
     server = create_server(
         RuntimeConfig(model="fake-model", artifact_directory=tmp_path),
         artifacts=make_artifacts(tmp_path),
         provider=FakeEmbeddingProvider(),
     )
 
-    with pytest.raises(ToolError, match=message):
+    with pytest.raises(MCPError, match=message) as raised:
         run(server.call_tool("retrieve_documentation", {"query": query}))
+    assert raised.value.code == TOOL_EXECUTION_ERROR
+    assert raised.value.data == {
+        "schema_version": 1,
+        "code": "invalid_query",
+        "classification": "permanent",
+        "retryable": False,
+    }
 
 
 class FailingEmbeddingProvider(FakeEmbeddingProvider):
     async def embed(self, inputs: Sequence[str]) -> NDArray[np.float32]:
-        raise EmbeddingError("private provider response", safe_message="Embedding service unavailable.")
+        raise EmbeddingError(
+            "private provider response",
+            safe_message="Embedding service unavailable.",
+            code=ApplicationErrorCode.EMBEDDING_SERVICE_UNAVAILABLE,
+        )
 
 
 class FailingSearchIndex(FakeSearchIndex):
@@ -215,13 +246,21 @@ class FailingSearchIndex(FakeSearchIndex):
         raise RuntimeError("private index failure")
 
 
+class UnexpectedEmbeddingProvider(FakeEmbeddingProvider):
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def embed(self, inputs: Sequence[str]) -> NDArray[np.float32]:
+        raise self.error
+
+
 def test_tool_translates_embedding_and_retrieval_failures_safely(tmp_path: Path) -> None:
     embedding_server = create_server(
         RuntimeConfig(model="fake-model", artifact_directory=tmp_path),
         artifacts=make_artifacts(tmp_path),
         provider=FailingEmbeddingProvider(),
     )
-    with pytest.raises(ToolError, match="Embedding service unavailable") as embedding_error:
+    with pytest.raises(MCPError, match="Embedding service unavailable") as embedding_error:
         run(embedding_server.call_tool("retrieve_documentation", {"query": "query"}))
     assert "private provider response" not in str(embedding_error.value)
 
@@ -230,9 +269,38 @@ def test_tool_translates_embedding_and_retrieval_failures_safely(tmp_path: Path)
         artifacts=make_artifacts(tmp_path, FailingSearchIndex()),
         provider=FakeEmbeddingProvider(),
     )
-    with pytest.raises(ToolError, match="index search failed") as retrieval_error:
+    with pytest.raises(MCPError, match="index search failed") as retrieval_error:
         run(retrieval_server.call_tool("retrieve_documentation", {"query": "query"}))
     assert "private index failure" not in str(retrieval_error.value)
+
+
+def provider_validation_error() -> ValidationError:
+    return ValidationError.from_exception_data(
+        "ProviderResponse",
+        [{"type": "missing", "loc": ("embeddings",), "input": {}}],
+    )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("unexpected provider bug"),
+        ValueError("unexpected provider bug"),
+        AttributeError("unexpected provider bug"),
+        provider_validation_error(),
+    ],
+)
+def test_tool_does_not_convert_unknown_provider_exceptions(tmp_path: Path, error: Exception) -> None:
+    server = create_server(
+        RuntimeConfig(model="fake-model", artifact_directory=tmp_path),
+        artifacts=make_artifacts(tmp_path),
+        provider=UnexpectedEmbeddingProvider(error),
+    )
+
+    with pytest.raises(ToolError) as raised:
+        run(server.call_tool("retrieve_documentation", {"query": "query"}))
+    assert not isinstance(raised.value, MCPError)
+    assert raised.value.__cause__ is error
 
 
 def test_tool_translates_invalid_structured_output_safely(tmp_path: Path) -> None:
@@ -242,8 +310,27 @@ def test_tool_translates_invalid_structured_output_safely(tmp_path: Path) -> Non
         provider=FakeEmbeddingProvider(),
     )
 
-    with pytest.raises(ToolError, match="invalid snippet"):
+    with pytest.raises(MCPError, match="invalid snippet") as raised:
         run(server.call_tool("retrieve_documentation", {"query": "query"}))
+    assert raised.value.data["code"] == "tool_output_invalid"
+
+
+def test_tool_reports_missing_lifespan_runtime_as_transient_mcp_error(tmp_path: Path) -> None:
+    server = create_server(
+        RuntimeConfig(model="fake-model", artifact_directory=tmp_path),
+        artifacts=make_artifacts(tmp_path),
+        provider_factory=lambda _: FakeEmbeddingProvider(),
+    )
+
+    with pytest.raises(MCPError, match="runtime is unavailable") as raised:
+        run(server.call_tool("retrieve_documentation", {"query": "query"}))
+
+    assert raised.value.data == {
+        "schema_version": 1,
+        "code": "server_runtime_unavailable",
+        "classification": "transient",
+        "retryable": True,
+    }
 
 
 def test_server_startup_does_not_change_artifact_bytes_hashes_or_mtimes(tmp_path: Path) -> None:
@@ -326,26 +413,36 @@ def test_client_session_invokes_typed_tool_over_in_memory_transport(tmp_path: Pa
     assert provider.closed
 
 
-def test_client_session_returns_safe_protocol_error_for_embedding_failure(tmp_path: Path) -> None:
+def test_client_session_raises_safe_protocol_error_for_embedding_failure(tmp_path: Path) -> None:
     server = create_server(
         RuntimeConfig(model="fake-model", artifact_directory=tmp_path),
         artifacts=make_artifacts(tmp_path),
         provider=FailingEmbeddingProvider(),
     )
 
-    async def exercise() -> tuple[bool, str]:
+    async def exercise() -> tuple[dict[str, object] | None, MCPError]:
         async with (
             InMemoryTransport(server) as (read_stream, write_stream),
             ClientSession(read_stream, write_stream) as session,
         ):
             await session.initialize()
-            result = await session.call_tool("retrieve_documentation", {"query": "query"})
-            return result.is_error, str(result.content)
+            tools = await session.list_tools()
+            with pytest.raises(MCPError) as raised:
+                await session.call_tool("retrieve_documentation", {"query": "query"})
+            return tools.tools[0].output_schema, raised.value
 
-    is_error, content = run(exercise())
-    assert is_error is True
-    assert "Embedding service unavailable" in content
-    assert "private provider response" not in content
+    output_schema, error = run(exercise())
+    assert output_schema is not None
+    assert output_schema["properties"]["result"]["items"]["$ref"] == "#/$defs/DocumentationSnippet"  # type: ignore[index]
+    assert error.code == TOOL_EXECUTION_ERROR
+    assert error.message == "Embedding service unavailable."
+    assert error.data == {
+        "schema_version": 1,
+        "code": "embedding_service_unavailable",
+        "classification": "transient",
+        "retryable": True,
+    }
+    assert "private provider response" not in str(error.error)
 
 
 def test_model_mismatch_is_rejected_before_server_start(tmp_path: Path) -> None:

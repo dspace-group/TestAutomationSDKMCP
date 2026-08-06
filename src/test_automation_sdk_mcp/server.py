@@ -12,14 +12,13 @@ from typing import Annotated, Protocol, cast, runtime_checkable
 import numpy as np
 from mcp.server import MCPServer
 from mcp.server.mcpserver.context import Context
-from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .config import DEFAULT_ARTIFACT_DIRECTORY, RuntimeConfig
 from .documents import EMBEDDING_DIMENSION
-from .errors import ConfigurationError, RetrievalError, TestAutomationSDKError
+from .errors import ApplicationErrorCode, ConfigurationError, RetrievalError, TestAutomationSDKError, to_mcp_error
 from .index import LoadedArtifacts, load_packaged_artifacts, load_verified_artifacts
 from .ollama import EmbeddingProvider, OllamaEmbeddingProvider
 
@@ -40,7 +39,14 @@ TOOL_DESCRIPTION = (
     "development. Use for exact APIs and patterns involving TestEnvironmentAccess or the ta fixture, variables, "
     "ports, Capturing or MultiPortCapturing, rasters and triggers, Scenario parameterization and lifecycle, "
     "synchronization, or capture result analysis. Do not use for generic Python or pytest questions or unrelated "
-    "dSPACE products. Returns nearest-first snippets with source locations and FAISS L2 distances."
+    "dSPACE products. Preconditions: verified packaged artifacts are loaded, the configured embedding model matches "
+    "the index, and the configured Ollama-compatible endpoint is reachable and supports /api/embed. Success returns "
+    "nearest-first documentation snippets with source locations and uncalibrated FAISS L2 distances. Public failures "
+    "are invalid_query (permanent), embedding_request_timed_out (transient), embedding_service_unavailable "
+    "(transient), embedding_service_rejected_request (permanent), embedding_service_failure (transient), "
+    "embedding_response_invalid (permanent), retrieval_failed (permanent), tool_output_invalid (permanent), and "
+    "server_runtime_unavailable (transient). Retry only transient failures with bounded backoff; change the input or "
+    "configuration for permanent failures."
 )
 
 
@@ -97,11 +103,14 @@ EmbeddingProviderFactory = Callable[[RuntimeConfig], EmbeddingProvider]
 
 def _validate_query(query: object) -> str:
     if not isinstance(query, str):
-        raise RetrievalError("Documentation query must be a string.")
+        raise RetrievalError("Documentation query must be a string.", code=ApplicationErrorCode.INVALID_QUERY)
     if not query.strip():
-        raise RetrievalError("Documentation query must not be empty.")
+        raise RetrievalError("Documentation query must not be empty.", code=ApplicationErrorCode.INVALID_QUERY)
     if len(query) > MAX_QUERY_LENGTH:
-        raise RetrievalError(f"Documentation query must be at most {MAX_QUERY_LENGTH} characters.")
+        raise RetrievalError(
+            f"Documentation query must be at most {MAX_QUERY_LENGTH} characters.",
+            code=ApplicationErrorCode.INVALID_QUERY,
+        )
     return query
 
 
@@ -110,25 +119,39 @@ def _validated_query_vector(vectors: object) -> NDArray[np.float32]:
         matrix = np.ascontiguousarray(np.asarray(vectors, dtype=np.float32))
         finite = bool(np.isfinite(matrix).all())
     except (OverflowError, TypeError, ValueError) as error:
-        raise RetrievalError("Embedding provider returned an invalid query vector.") from error
+        raise RetrievalError(
+            "Embedding provider returned an invalid query vector.",
+            code=ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID,
+        ) from error
     if matrix.shape != (1, EMBEDDING_DIMENSION) or not finite:
-        raise RetrievalError("Embedding provider returned an invalid query vector.")
+        raise RetrievalError(
+            "Embedding provider returned an invalid query vector.",
+            code=ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID,
+        )
     return matrix
 
 
 def _search_index(index: object, query_vector: NDArray[np.float32], result_count: int) -> tuple[object, object]:
     search = getattr(index, "search", None)
     if not callable(search):
-        raise RetrievalError("The documentation index cannot execute a search.")
+        raise RetrievalError(
+            "The documentation index cannot execute a search.", code=ApplicationErrorCode.RETRIEVAL_FAILED
+        )
     try:
         result = search(query_vector, result_count)
     except (RuntimeError, TypeError, ValueError) as error:
-        raise RetrievalError("The documentation index search failed.") from error
+        raise RetrievalError(
+            "The documentation index search failed.", code=ApplicationErrorCode.RETRIEVAL_FAILED
+        ) from error
     if not isinstance(result, tuple):
-        raise RetrievalError("The documentation index returned an invalid search result.")
+        raise RetrievalError(
+            "The documentation index returned an invalid search result.", code=ApplicationErrorCode.RETRIEVAL_FAILED
+        )
     result_items = cast(tuple[object, ...], result)
     if len(result_items) != 2:
-        raise RetrievalError("The documentation index returned an invalid search result.")
+        raise RetrievalError(
+            "The documentation index returned an invalid search result.", code=ApplicationErrorCode.RETRIEVAL_FAILED
+        )
     return result_items[0], result_items[1]
 
 
@@ -164,17 +187,14 @@ class DocumentationRetriever:
 
         index_count = getattr(self._artifacts.index, "ntotal", None)
         if isinstance(index_count, bool) or not isinstance(index_count, int) or index_count < 0:
-            raise RetrievalError("The documentation index has an invalid vector count.")
+            raise RetrievalError(
+                "The documentation index has an invalid vector count.", code=ApplicationErrorCode.RETRIEVAL_FAILED
+            )
         result_count = min(self._result_count, index_count, len(documents))
         if result_count == 0:
             return []
 
-        try:
-            vectors = await self._provider.embed([validated_query])
-        except TestAutomationSDKError:
-            raise
-        except (RuntimeError, TypeError, ValueError) as error:
-            raise RetrievalError("The embedding provider failed to embed the query.") from error
+        vectors = await self._provider.embed([validated_query])
         query_vector = _validated_query_vector(vectors)
 
         try:
@@ -187,29 +207,42 @@ class DocumentationRetriever:
         except TestAutomationSDKError:
             raise
         except (RuntimeError, TypeError, ValueError) as error:
-            raise RetrievalError("The documentation index search failed.") from error
+            raise RetrievalError(
+                "The documentation index search failed.", code=ApplicationErrorCode.RETRIEVAL_FAILED
+            ) from error
 
         try:
             distances = np.asarray(raw_distances, dtype=np.float64)
             row_ids = np.asarray(raw_row_ids)
             finite_distances = bool(np.isfinite(distances).all())
         except (OverflowError, TypeError, ValueError) as error:
-            raise RetrievalError("The documentation index returned invalid search data.") from error
+            raise RetrievalError(
+                "The documentation index returned invalid search data.", code=ApplicationErrorCode.RETRIEVAL_FAILED
+            ) from error
         if distances.shape != (1, result_count) or not finite_distances:
-            raise RetrievalError("The documentation index returned invalid distances.")
+            raise RetrievalError(
+                "The documentation index returned invalid distances.", code=ApplicationErrorCode.RETRIEVAL_FAILED
+            )
         if row_ids.shape != (1, result_count) or not np.issubdtype(row_ids.dtype, np.integer):
-            raise RetrievalError("The documentation index returned invalid row IDs.")
+            raise RetrievalError(
+                "The documentation index returned invalid row IDs.", code=ApplicationErrorCode.RETRIEVAL_FAILED
+            )
 
         for distance in distances[0]:
             if distance < 0:
-                raise RetrievalError("The documentation index returned an invalid L2 distance.")
+                raise RetrievalError(
+                    "The documentation index returned an invalid L2 distance.",
+                    code=ApplicationErrorCode.RETRIEVAL_FAILED,
+                )
 
         ordered_positions = sorted(range(result_count), key=lambda position: float(distances[0][position]))
         results: list[RetrievalResult] = []
         for position in ordered_positions:
             row_id = int(row_ids[0][position])
             if row_id < 0 or row_id >= len(documents):
-                raise RetrievalError("The documentation index returned an invalid row ID.")
+                raise RetrievalError(
+                    "The documentation index returned an invalid row ID.", code=ApplicationErrorCode.RETRIEVAL_FAILED
+                )
             document = documents[row_id]
             results.append(
                 RetrievalResult(
@@ -327,18 +360,27 @@ def create_server(
                 try:
                     runtime_context = context.request_context.lifespan_context
                     retriever = runtime_context.retriever
-                except (AttributeError, ValueError):
+                except (AttributeError, ValueError) as error:
                     if active_runtime is None:
-                        raise
+                        project_error = RetrievalError(
+                            "The documentation server runtime is unavailable.",
+                            code=ApplicationErrorCode.SERVER_RUNTIME_UNAVAILABLE,
+                        )
+                        raise to_mcp_error(project_error) from error
                     retriever = active_runtime.retriever
             results = await retriever.retrieve(query)
-            return [_snippet(result) for result in results]
+            try:
+                return [_snippet(result) for result in results]
+            except ValidationError as error:
+                project_error = RetrievalError(
+                    "The documentation server returned an invalid snippet.",
+                    code=ApplicationErrorCode.TOOL_OUTPUT_INVALID,
+                )
+                raise to_mcp_error(project_error) from error
         except TestAutomationSDKError as error:
-            raise ToolError(error.safe_message) from error
-        except ValidationError as error:
-            raise ToolError("The documentation server returned an invalid snippet.") from error
-        except (AttributeError, ValueError) as error:
-            raise ToolError("The documentation server runtime is unavailable.") from error
+            if error.code is None:
+                raise
+            raise to_mcp_error(error) from error
 
     server.add_tool(
         retrieve_documentation,

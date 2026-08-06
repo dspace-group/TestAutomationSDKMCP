@@ -9,7 +9,7 @@ import numpy as np
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from .errors import EmbeddingError
+from .errors import ApplicationErrorCode, EmbeddingError
 
 EMBEDDING_DIMENSION = 768
 DEFAULT_BATCH_SIZE = 32
@@ -97,9 +97,15 @@ def _vectors_to_matrix(vectors: Sequence[Sequence[float]], input_count: int) -> 
     try:
         matrix = np.ascontiguousarray(np.asarray(vectors, dtype=np.float32))
     except (OverflowError, TypeError, ValueError) as error:
-        raise EmbeddingError("Embedding service returned invalid vector values.") from error
+        raise EmbeddingError(
+            "Embedding service returned invalid vector values.",
+            code=ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID,
+        ) from error
     if matrix.shape != (input_count, EMBEDDING_DIMENSION) or not bool(np.isfinite(matrix).all()):
-        raise EmbeddingError("Embedding service returned invalid vector values.")
+        raise EmbeddingError(
+            "Embedding service returned invalid vector values.",
+            code=ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID,
+        )
     return matrix
 
 
@@ -131,7 +137,9 @@ class OllamaEmbeddingProvider:
 
     async def __aenter__(self) -> Self:
         if self._closed:
-            raise EmbeddingError("Embedding provider is closed.")
+            raise EmbeddingError(
+                "Embedding provider is closed.", code=ApplicationErrorCode.EMBEDDING_SERVICE_UNAVAILABLE
+            )
         return self
 
     async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
@@ -148,7 +156,9 @@ class OllamaEmbeddingProvider:
         """Embed a non-empty sequence in bounded requests and preserve its order."""
 
         if self._closed:
-            raise EmbeddingError("Embedding provider is closed.")
+            raise EmbeddingError(
+                "Embedding provider is closed.", code=ApplicationErrorCode.EMBEDDING_SERVICE_UNAVAILABLE
+            )
         if isinstance(inputs, (str, bytes)):
             raise TypeError("inputs must be a sequence of strings")
         input_values = _validate_inputs(inputs)
@@ -165,36 +175,64 @@ class OllamaEmbeddingProvider:
             response = await self._client.post(self._endpoint_url, json=request.model_dump(mode="json"))
             response.raise_for_status()
         except httpx.TimeoutException as error:
-            raise EmbeddingError("Embedding request timed out.") from error
+            raise EmbeddingError(
+                "Embedding request timed out.", code=ApplicationErrorCode.EMBEDDING_REQUEST_TIMED_OUT
+            ) from error
         except httpx.HTTPStatusError as error:
-            raise EmbeddingError(f"Embedding service returned HTTP status {error.response.status_code}.") from error
+            status_code = error.response.status_code
+            code = (
+                ApplicationErrorCode.EMBEDDING_SERVICE_FAILURE
+                if status_code in {408, 429} or status_code >= 500
+                else ApplicationErrorCode.EMBEDDING_SERVICE_REJECTED_REQUEST
+            )
+            raise EmbeddingError(f"Embedding service returned HTTP status {status_code}.", code=code) from error
         except httpx.RequestError as error:
-            raise EmbeddingError("Embedding service is unavailable.") from error
+            raise EmbeddingError(
+                "Embedding service is unavailable.", code=ApplicationErrorCode.EMBEDDING_SERVICE_UNAVAILABLE
+            ) from error
 
         try:
             payload = response.json()
         except (TypeError, ValueError, UnicodeError) as error:
-            raise EmbeddingError("Embedding service returned invalid JSON.") from error
+            raise EmbeddingError(
+                "Embedding service returned invalid JSON.", code=ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID
+            ) from error
         try:
             parsed = OllamaEmbeddingResponse.model_validate(payload)
         except ValidationError as error:
-            raise EmbeddingError("Embedding service returned an invalid response.") from error
+            raise EmbeddingError(
+                "Embedding service returned an invalid response.", code=ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID
+            ) from error
 
         if parsed.model is not None and parsed.model != self._model:
-            raise EmbeddingError("Embedding service returned an unexpected model.")
+            raise EmbeddingError(
+                "Embedding service returned an unexpected model.", code=ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID
+            )
         if len(parsed.embeddings) != len(inputs):
-            raise EmbeddingError("Embedding service returned an unexpected number of vectors.")
+            raise EmbeddingError(
+                "Embedding service returned an unexpected number of vectors.",
+                code=ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID,
+            )
 
         vectors: list[list[float]] = []
         for vector in parsed.embeddings:
             if len(vector) != EMBEDDING_DIMENSION:
-                raise EmbeddingError(f"Embedding vectors must have {EMBEDDING_DIMENSION} dimensions.")
+                raise EmbeddingError(
+                    f"Embedding vectors must have {EMBEDDING_DIMENSION} dimensions.",
+                    code=ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID,
+                )
             try:
                 converted = [float(value) for value in vector]
             except (OverflowError, TypeError, ValueError) as error:
-                raise EmbeddingError("Embedding service returned invalid vector values.") from error
+                raise EmbeddingError(
+                    "Embedding service returned invalid vector values.",
+                    code=ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID,
+                ) from error
             if not all(isfinite(value) for value in converted):
-                raise EmbeddingError("Embedding service returned invalid vector values.")
+                raise EmbeddingError(
+                    "Embedding service returned invalid vector values.",
+                    code=ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID,
+                )
             vectors.append(converted)
         return vectors
 

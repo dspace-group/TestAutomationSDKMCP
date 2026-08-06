@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from test_automation_sdk_mcp.errors import EmbeddingError
+from test_automation_sdk_mcp.errors import ApplicationErrorCode, EmbeddingError
 from test_automation_sdk_mcp.ollama import (
     EMBEDDING_DIMENSION,
     OllamaEmbeddingProvider,
@@ -168,19 +168,39 @@ def test_response_validation_errors_are_safe(payload: object, message: str) -> N
     transport = TrackingTransport(response_handler(payload))
     provider = OllamaEmbeddingProvider("http://embedding.example.test", "nomic-embed-text:v1.5", transport=transport)
 
-    with pytest.raises(EmbeddingError, match=message):
+    with pytest.raises(EmbeddingError, match=message) as raised:
         run(provider.embed(["one"]))
 
+    assert raised.value.code is ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID
     assert "not-a-number" not in str(transport.requests[0])
     run(provider.aclose())
 
 
-def test_malformed_json_http_and_network_failures_are_translated() -> None:
+@pytest.mark.parametrize(
+    ("status_code", "expected_code"),
+    [
+        (408, ApplicationErrorCode.EMBEDDING_SERVICE_FAILURE),
+        (429, ApplicationErrorCode.EMBEDDING_SERVICE_FAILURE),
+        (503, ApplicationErrorCode.EMBEDDING_SERVICE_FAILURE),
+        (400, ApplicationErrorCode.EMBEDDING_SERVICE_REJECTED_REQUEST),
+        (404, ApplicationErrorCode.EMBEDDING_SERVICE_REJECTED_REQUEST),
+    ],
+)
+def test_http_status_failures_are_classified(status_code: int, expected_code: ApplicationErrorCode) -> None:
+    transport = TrackingTransport(response_handler({"private": "body"}, status_code=status_code))
+    provider = OllamaEmbeddingProvider("http://embedding.example.test", "nomic-embed-text:v1.5", transport=transport)
+
+    with pytest.raises(EmbeddingError, match=f"HTTP status {status_code}") as raised:
+        run(provider.embed(["one"]))
+
+    assert raised.value.code is expected_code
+    assert "private" not in str(raised.value)
+    run(provider.aclose())
+
+
+def test_malformed_json_timeout_and_network_failures_are_classified() -> None:
     async def malformed(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"{not-json", request=request)
-
-    async def server_error(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(503, content=b"private response body", request=request)
 
     async def timeout(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timed out", request=request)
@@ -188,11 +208,10 @@ def test_malformed_json_http_and_network_failures_are_translated() -> None:
     async def connection_error(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection failed", request=request)
 
-    for handler, message in (
-        (malformed, "invalid JSON"),
-        (server_error, "HTTP status 503"),
-        (timeout, "timed out"),
-        (connection_error, "unavailable"),
+    for handler, message, expected_code in (
+        (malformed, "invalid JSON", ApplicationErrorCode.EMBEDDING_RESPONSE_INVALID),
+        (timeout, "timed out", ApplicationErrorCode.EMBEDDING_REQUEST_TIMED_OUT),
+        (connection_error, "unavailable", ApplicationErrorCode.EMBEDDING_SERVICE_UNAVAILABLE),
     ):
         transport = TrackingTransport(handler)
         provider = OllamaEmbeddingProvider(
@@ -202,7 +221,8 @@ def test_malformed_json_http_and_network_failures_are_translated() -> None:
         with pytest.raises(EmbeddingError, match=message) as raised:
             run(provider.embed(["one"]))
 
-        assert "private response body" not in str(raised.value)
+        assert raised.value.code is expected_code
+        assert raised.value.__cause__ is not None
         run(provider.aclose())
 
 
