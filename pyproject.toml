@@ -5,7 +5,9 @@ description = "MCP Server for Test Automation SDK - Provides RAG-based documenta
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 dependencies = [
+    "faiss-cpu==1.15.0",
     "httpx>=0.28.0",
+    "markdownify>=0.14.0",
     "mcp[cli]>=2.0.0",
     "numpy>=2.0.0",
     "pydantic>=2.0.0",
@@ -13,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 test-automation-sdk-mcp = "test_automation_sdk_mcp:main"
+test-automation-sdk-mcp-build-index = "test_automation_sdk_mcp.build_index:main"
 
 [build-system]
 requires = ["uv_build>=0.12.1,<0.13.0"]

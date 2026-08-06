@@ -23,5 +23,9 @@ class EmbeddingError(TestAutomationSDKError):
     """Raised when an embedding provider fails or returns invalid data."""
 
 
+class IndexBuildError(TestAutomationSDKError):
+    """Raised when documentation ingestion or index publication fails."""
+
+
 class RetrievalError(TestAutomationSDKError):
     """Raised when a retrieval operation cannot produce a valid result."""
