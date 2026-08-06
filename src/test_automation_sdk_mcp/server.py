@@ -24,6 +24,24 @@ from .ollama import EmbeddingProvider, OllamaEmbeddingProvider
 
 MAX_QUERY_LENGTH = 4_000
 
+SERVER_INSTRUCTIONS = (
+    "Use this server when a user needs authoritative Test Automation SDK information or is developing, reviewing, "
+    "or debugging Python tests that use dspace.testautomation. Call retrieve_documentation before making "
+    "SDK-specific claims or choosing SDK APIs and patterns. Relevant topics include test environments and ports, "
+    "variable access, capturing and triggers, scenario setup and execution, synchronization, and captured-data "
+    "analysis. Do not call it solely for generic Python or pytest questions, test-domain logic that does not depend "
+    "on the SDK, or unrelated dSPACE products. Base SDK-specific guidance on the returned snippets and retain their "
+    "source locations."
+)
+
+TOOL_DESCRIPTION = (
+    "Retrieve authoritative, sourced Test Automation SDK documentation for SDK questions and SDK-based Python test "
+    "development. Use for exact APIs and patterns involving TestEnvironmentAccess or the ta fixture, variables, "
+    "ports, Capturing or MultiPortCapturing, rasters and triggers, Scenario parameterization and lifecycle, "
+    "synchronization, or capture result analysis. Do not use for generic Python or pytest questions or unrelated "
+    "dSPACE products. Returns nearest-first snippets with source locations and FAISS L2 distances."
+)
+
 
 class DocumentationSnippet(BaseModel):
     """Strict structured output returned by the MCP retrieval tool."""
@@ -280,12 +298,22 @@ def create_server(
 
     server = MCPServer[_ServerRuntime](
         name="Test Automation SDK",
-        description="Retrieve sourced Test Automation SDK documentation snippets.",
+        description="Authoritative documentation retrieval for the Test Automation SDK and SDK-based test development.",
+        instructions=SERVER_INSTRUCTIONS,
         lifespan=lifespan,
     )
 
     async def retrieve_documentation(
-        query: Annotated[str, Field(strict=True)],
+        query: Annotated[
+            str,
+            Field(
+                strict=True,
+                description=(
+                    "One self-contained Test Automation SDK question or test-development task, including relevant "
+                    "API names, SDK concepts, desired behavior, or error details."
+                ),
+            ),
+        ],
         context: Context[_ServerRuntime, object],
     ) -> list[DocumentationSnippet]:
         """Retrieve relevant documentation for one non-empty query."""
@@ -313,10 +341,7 @@ def create_server(
     server.add_tool(
         retrieve_documentation,
         name="retrieve_documentation",
-        description=(
-            "Search the Test Automation SDK documentation and return nearest-first sourced snippets. "
-            "Each distance is an FAISS L2 distance."
-        ),
+        description=TOOL_DESCRIPTION,
         annotations=ToolAnnotations.model_validate(
             {
                 "readOnlyHint": True,
@@ -333,6 +358,8 @@ def create_server(
 
 __all__ = [
     "MAX_QUERY_LENGTH",
+    "SERVER_INSTRUCTIONS",
+    "TOOL_DESCRIPTION",
     "DocumentationRetriever",
     "DocumentationSnippet",
     "EmbeddingProviderFactory",

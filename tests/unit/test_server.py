@@ -19,6 +19,8 @@ from test_automation_sdk_mcp.errors import ConfigurationError, EmbeddingError, R
 from test_automation_sdk_mcp.index import ArtifactPaths, LoadedArtifacts
 from test_automation_sdk_mcp.server import (
     MAX_QUERY_LENGTH,
+    SERVER_INSTRUCTIONS,
+    TOOL_DESCRIPTION,
     DocumentationRetriever,
     create_server,
 )
@@ -143,9 +145,12 @@ def test_server_exposes_one_strict_annotated_structured_tool(tmp_path: Path) -> 
     tools = run(server.list_tools())
     assert len(tools) == 1  # type: ignore[arg-type]
     tool = tools[0]  # type: ignore[index]
+    assert server.instructions == SERVER_INSTRUCTIONS
     assert tool.name == "retrieve_documentation"  # type: ignore[union-attr]
+    assert tool.description == TOOL_DESCRIPTION  # type: ignore[union-attr]
     assert tool.input_schema["required"] == ["query"]  # type: ignore[union-attr]
     assert tool.input_schema["properties"]["query"]["type"] == "string"  # type: ignore[union-attr]
+    assert "self-contained Test Automation SDK question" in tool.input_schema["properties"]["query"]["description"]  # type: ignore[union-attr]
     assert tool.output_schema is not None  # type: ignore[union-attr]
     assert tool.output_schema["type"] == "object"  # type: ignore[union-attr]
     assert tool.output_schema["properties"]["result"]["type"] == "array"  # type: ignore[union-attr]
