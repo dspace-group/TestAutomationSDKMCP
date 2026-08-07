@@ -2,9 +2,9 @@
 
 This document describes the implementation of the Test Automation SDK MCP
 server. The server is a read-only, retrieval-augmented documentation service:
-it exposes one MCP tool, `retrieve_documentation`, and uses an Ollama-compatible
-embedding endpoint to turn both indexed documentation and incoming queries
-into vectors.
+it exposes one MCP tool, `retrieve_documentation`, and uses a selected Ollama
+or OpenAI-compatible embedding endpoint to turn both indexed documentation and
+incoming queries into vectors.
 
 The index is built ahead of time. Server startup loads and verifies the
 published artifacts; it does not crawl the documentation or rebuild the index.
@@ -13,8 +13,8 @@ published artifacts; it does not crawl the documentation or rebuild the index.
 
 The MCP client is typically hosted by an AI agent. The agent decides when the
 SDK-specific tool is needed, while the MCP server performs only deterministic
-documentation retrieval. Ollama supplies embeddings but does not generate the
-answer returned to the user.
+documentation retrieval. The selected embedding service supplies vectors but
+does not generate the answer returned to the user.
 
 ```mermaid
 flowchart LR
@@ -24,7 +24,7 @@ flowchart LR
 	 server[Test Automation SDK MCP server\nstdio transport]
 	 tool[retrieve_documentation\nread-only structured tool]
 	 artifacts[(Verified packaged or\nconfigured artifacts)]
-	 ollama[Ollama-compatible service\nPOST /api/embed]
+	 embeddings[Selected embedding service\nOllama /api/embed or OpenAI /v1/embeddings]
 	 docs[HTML documentation export\nsearch.json]
 
 	 developer -->|SDK question or test task| agent
@@ -32,8 +32,8 @@ flowchart LR
 	 client <-->|MCP JSON-RPC over stdin/stdout| server
 	 server --> tool
 	 tool -->|load once, read-only| artifacts
-	 tool -->|query embedding| ollama
-	 ollama -->|finite 768-value vector| tool
+	 tool -->|query embedding| embeddings
+	 embeddings -->|finite 768-value vector| tool
 	 tool -->|nearest sourced snippets| client
 	 client --> agent
 	 agent -->|answer grounded in snippets| developer
@@ -42,15 +42,15 @@ flowchart LR
 
 ### Runtime responsibilities
 
-| Boundary                       | Responsibility                                                                                                          |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| MCP client host                | Starts the console entry point and forwards MCP requests from the agent.                                                |
-| `test_automation_sdk_mcp.main` | Creates the server, configures stderr logging, and runs MCP over stdio.                                                 |
-| `create_server`                | Loads verified artifacts, checks the configured model, registers the tool, and owns the provider lifecycle.             |
-| `DocumentationRetriever`       | Validates a query, requests its embedding, searches FAISS, validates rows and distances, and maps rows to documents.    |
-| `OllamaEmbeddingProvider`      | Calls `POST /api/embed`, validates model and vector shape, and translates HTTP/client failures into application errors. |
-| FAISS `IndexFlatL2`            | Stores the document embeddings and returns nearest row IDs with L2 distances.                                           |
-| `DocumentStore`                | Stores the ordered metadata and content records that correspond to FAISS row IDs.                                       |
+| Boundary                       | Responsibility                                                                                                             |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| MCP client host                | Starts the console entry point and forwards MCP requests from the agent.                                                   |
+| `test_automation_sdk_mcp.main` | Creates the server, configures stderr logging, and runs MCP over stdio.                                                    |
+| `create_server`                | Loads verified artifacts, checks provider/model compatibility, registers the tool, and owns the provider lifecycle.        |
+| `DocumentationRetriever`       | Validates a query, requests its embedding, searches FAISS, validates rows and distances, and maps rows to documents.       |
+| `provider/`                    | Selects Ollama or OpenAI-compatible transport, validates wire boundaries, and translates failures into application errors. |
+| FAISS `IndexFlatL2`            | Stores the document embeddings and returns nearest row IDs with L2 distances.                                              |
+| `DocumentStore`                | Stores the ordered metadata and content records that correspond to FAISS row IDs.                                          |
 
 ## Package Structure
 
@@ -59,11 +59,11 @@ flowchart TB
 	 subgraph build[Build-time pipeline]
 		  build_index[build_index.py\nbuild_index]
 		  chunking[chunking.py\nvalidate, normalize, chunk, hash]
-		  ollama_build[ollama.py\nOllamaEmbeddingProvider]
+		  provider_build[provider/\nselected embedding provider]
 		  documents[documents.py\nDocumentStore and IndexManifest]
 		  index_io[index.py\nstage, verify, publish]
 		  build_index --> chunking
-		  build_index --> ollama_build
+		  build_index --> provider_build
 		  build_index --> documents
 		  build_index --> index_io
 	 end
@@ -73,26 +73,26 @@ flowchart TB
 		  config[config.py\nRuntimeConfig]
 		  server[server.py\ncreate_server and MCP tool]
 		  retriever[DocumentationRetriever]
-		  ollama_runtime[ollama.py\nasync HTTP provider]
+		  provider_runtime[provider/\nasync HTTP providers]
 		  index_runtime[index.py\nload_verified_artifacts]
 		  errors[errors.py\npublic MCP error envelope]
 		  entry --> server
 		  config --> server
 		  server --> retriever
-		  server --> ollama_runtime
+		  server --> provider_runtime
 		  server --> index_runtime
 		  server --> errors
-		  retriever --> ollama_runtime
+		  retriever --> provider_runtime
 		  retriever --> index_runtime
 	 end
 
 	 build_index -. publishes .-> index_runtime
-	 ollama_build -. same embedding contract .-> ollama_runtime
+	 provider_build -. same embedding contract .-> provider_runtime
 ```
 
-The build and runtime paths share the embedding dimension and model contract,
+The build and runtime paths share the embedding dimension and provider contract,
 but they have different jobs. The builder creates artifacts; the runtime only
-loads, validates, and queries them.
+loads, validates, checks compatibility, and queries them.
 
 ## Building the Index
 
@@ -110,7 +110,7 @@ flowchart TD
 	 normalize[normalize_html_fragment\nHTML fragment to Markdown]
 	 chunk[chunk_items\nsplit at textual boundaries\nwith overlap]
 	 embedding_text[Build embedding text\nbreadcrumbs + title + content]
-	 embed[OllamaEmbeddingProvider.embed\nbatched POST /api/embed]
+	 embed[Selected provider.embed\nbatched provider requests]
 	 validate_vectors[Validate count, finite values,\nand 768 dimensions]
 	faiss["IndexFlatL2(768)\nadd vectors in chunk order"]
 	 store[DocumentStore\nrecords in the same order as vectors]
@@ -139,9 +139,9 @@ flowchart TD
 2. `chunk_items` normalizes each section and produces deterministic chunk IDs
 	from location, chunk index, and content. The default maximum is 1,000
 	characters with 200 characters of overlap.
-3. `_embed_chunks` sends embedding text to Ollama in batches. The default batch
-	size is 32. Every response must contain one finite vector of exactly 768
-	values per input.
+3. `_embed_chunks` sends embedding text to the selected provider in batches.
+	The default batch size is 32. Every response must contain one finite vector
+	of exactly 768 values per input.
 4. FAISS receives vectors in the same order as the `DocumentStore` records.
 	This order is the row-ID contract used during retrieval.
 5. The builder writes the FAISS index, document JSON, and manifest in a
@@ -165,8 +165,10 @@ flowchart LR
 
 At runtime, `load_verified_artifacts` rejects missing files, invalid JSON or
 schemas, hash mismatches, mixed generations, wrong FAISS dimensions, wrong
-metrics, and count mismatches. The configured embedding model must also equal
-the model recorded in the manifest before the MCP server is created.
+metrics, and count mismatches. The configured provider must equal the manifest
+provider before the MCP server is created. Ollama always requires an exact
+model match; a configured OpenAI model requires an exact non-null match, while
+an unconfigured OpenAI model is explicit operator trust mode.
 
 ## Server Startup and Lifespan
 
@@ -177,7 +179,7 @@ sequenceDiagram
 	 participant Config as RuntimeConfig
 	 participant Loader as artifact loader
 	 participant Server as MCPServer
-	 participant Ollama as Ollama provider
+	 participant Provider as Selected embedding provider
 
 	 Host->>Main: start console script
 	 Main->>Config: read TA_SDK_* environment
@@ -186,11 +188,11 @@ sequenceDiagram
 	 Loader-->>Main: verified LoadedArtifacts
 	 Main->>Server: create_server and register tool
 	 Main->>Server: run(transport="stdio")
-	 Server->>Ollama: create provider in lifespan
+	 Server->>Provider: create provider in lifespan
 	 Server-->>Host: MCP initialize and tool listing
-	 Note over Server,Ollama: Provider is shared by retrieval calls during this server lifespan.
+	 Note over Server,Provider: Provider is shared by retrieval calls during this server lifespan.
 	 Host->>Server: shutdown
-	 Server->>Ollama: aclose()
+	 Server->>Provider: aclose()
 ```
 
 The default artifact directory is the package's `db/` resource directory. A
@@ -211,8 +213,8 @@ sequenceDiagram
 	 participant Client as MCP client
 	 participant MCP as MCP server
 	 participant Tool as retrieve_documentation
-	 participant Provider as OllamaEmbeddingProvider
-	 participant Ollama as Ollama /api/embed
+	 participant Provider as Selected embedding provider
+	 participant Embeddings as Ollama or OpenAI-compatible endpoint
 	 participant FAISS as IndexFlatL2
 	 participant Store as DocumentStore
 
@@ -222,8 +224,8 @@ sequenceDiagram
 	 Client->>MCP: JSON-RPC tools/call over stdio
 	 MCP->>Tool: validate structured query
 	 Tool->>Provider: embed([query])
-	 Provider->>Ollama: POST /api/embed {model, input: [query]}
-	 Ollama-->>Provider: one finite 768-value embedding
+	 Provider->>Embeddings: POST provider embeddings endpoint
+	 Embeddings-->>Provider: one finite 768-value embedding
 	 Provider-->>Tool: validated float32 query matrix
 	 Tool->>FAISS: search(query_vector, min(result_count, ntotal, document_count))
 	 FAISS-->>Tool: distances and row IDs
@@ -253,34 +255,39 @@ sequenceDiagram
 ## Error and Trust Boundaries
 
 The server validates data at each external boundary: environment variables,
-source files, Ollama requests and responses, FAISS results, artifact files, and
+source files, provider requests and responses, FAISS results, artifact files, and
 MCP tool output. Expected application failures are translated to a safe native
 MCP error with a code, classification, and retryability flag.
 
-| Boundary          | Examples                                                  | Runtime behavior                                                                 |
-| ----------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Query input       | Empty, non-string, or oversized query                     | `invalid_query`; permanent and not retryable.                                    |
-| Ollama connection | Timeout or unavailable endpoint                           | Transient embedding error; retry may be appropriate with bounded backoff.        |
-| Ollama response   | Wrong model, vector count, dimension, or non-finite value | `embedding_response_invalid`; permanent until the service contract is corrected. |
-| FAISS/artifacts   | Invalid index, row ID, distance, hash, count, or schema   | Retrieval or artifact failure; the server does not serve unverified data.        |
-| MCP output        | Invalid snippet fields or distance                        | `tool_output_invalid`; the response is rejected rather than returned partially.  |
+| Boundary            | Examples                                                | Runtime behavior                                                                 |
+| ------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Query input         | Empty, non-string, or oversized query                   | `invalid_query`; permanent and not retryable.                                    |
+| Provider connection | Timeout or unavailable endpoint                         | Transient embedding error; retry may be appropriate with bounded backoff.        |
+| Provider response   | Wrong model, indexes, vector count, dimension, or value | `embedding_response_invalid`; permanent until the service contract is corrected. |
+| FAISS/artifacts     | Invalid index, row ID, distance, hash, count, or schema | Retrieval or artifact failure; the server does not serve unverified data.        |
+| MCP output          | Invalid snippet fields or distance                      | `tool_output_invalid`; the response is rejected rather than returned partially.  |
 
-Secrets such as `TA_SDK_OLLAMA_API_KEY` are used only as an HTTP bearer token
-and are not included in logs or public error messages. Protocol messages stay
+Secrets such as `TA_SDK_OLLAMA_API_KEY` and `TA_SDK_OPENAI_API_KEY` are used
+only as HTTP bearer tokens and are not included in logs or public error messages.
+Protocol messages stay
 on stdout; human-readable logging and startup errors go to stderr so stdio MCP
 traffic remains parseable.
 
 ## Configuration Surface
 
-| Variable                 | Default                  | Used by                                                   |
-| ------------------------ | ------------------------ | --------------------------------------------------------- |
-| `TA_SDK_OLLAMA_URL`      | `http://127.0.0.1:11434` | Ollama base URL; `/api/embed` is appended.                |
-| `TA_SDK_OLLAMA_MODEL`    | `nomic-embed-text:v1.5`  | Build and query embedding model; must match the manifest. |
-| `TA_SDK_OLLAMA_API_KEY`  | unset                    | Optional bearer token for a managed endpoint.             |
-| `TA_SDK_RESULT_COUNT`    | `5`                      | Maximum number of nearest snippets, from 1 through 50.    |
-| `TA_SDK_DB_DIR`          | packaged `db/`           | Alternate fully validated artifact directory.             |
-| `TA_SDK_CONNECT_TIMEOUT` | `5` seconds              | HTTP connection timeout.                                  |
-| `TA_SDK_REQUEST_TIMEOUT` | `30` seconds             | HTTP request timeout.                                     |
+| Variable                    | Default                  | Used by                                       |
+| --------------------------- | ------------------------ | --------------------------------------------- |
+| `TA_SDK_EMBEDDING_PROVIDER` | `ollama`                 | Selects `ollama` or `openai`.                 |
+| `TA_SDK_OLLAMA_URL`         | `http://127.0.0.1:11434` | Ollama base URL; `/api/embed` is appended.    |
+| `TA_SDK_OLLAMA_MODEL`       | `nomic-embed-text:v1.5`  | Required Ollama model binding.                |
+| `TA_SDK_OLLAMA_API_KEY`     | unset                    | Optional Ollama bearer token.                 |
+| `TA_SDK_OPENAI_URL`         | unset                    | Complete `/v1/embeddings` endpoint.           |
+| `TA_SDK_OPENAI_MODEL`       | unset                    | Optional exact OpenAI model binding.          |
+| `TA_SDK_OPENAI_API_KEY`     | unset                    | Optional OpenAI bearer token.                 |
+| `TA_SDK_RESULT_COUNT`       | `5`                      | Maximum nearest snippets, from 1 through 50.  |
+| `TA_SDK_DB_DIR`             | packaged `db/`           | Alternate fully validated artifact directory. |
+| `TA_SDK_CONNECT_TIMEOUT`    | `5` seconds              | HTTP connection timeout.                      |
+| `TA_SDK_REQUEST_TIMEOUT`    | `30` seconds             | HTTP request timeout.                         |
 
 ## Source Map
 
@@ -292,8 +299,10 @@ traffic remains parseable.
   atomic publication.
 - `src/test_automation_sdk_mcp/chunking.py`: source validation, HTML
   normalization, chunking, and source hashes.
-- `src/test_automation_sdk_mcp/ollama.py`: async Ollama-compatible HTTP
-  embedding client and response validation.
+- `src/test_automation_sdk_mcp/provider/`: shared embedding contract, Ollama
+	and OpenAI-compatible transports, and the provider factory.
+- `src/test_automation_sdk_mcp/ollama.py`: compatibility imports for the
+	legacy Ollama provider module.
 - `src/test_automation_sdk_mcp/index.py`: artifact I/O and cross-file
   generation validation.
 - `src/test_automation_sdk_mcp/documents.py`: strict document and manifest

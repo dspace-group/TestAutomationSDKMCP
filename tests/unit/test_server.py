@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from test_automation_sdk_mcp import main as server_main
 from test_automation_sdk_mcp.build_index import build_index
-from test_automation_sdk_mcp.config import RuntimeConfig
+from test_automation_sdk_mcp.config import EmbeddingProviderKind, RuntimeConfig
 from test_automation_sdk_mcp.documents import ChunkingManifest, DocumentRecord, DocumentStore, IndexManifest
 from test_automation_sdk_mcp.errors import (
     TOOL_EXECUTION_ERROR,
@@ -28,6 +28,7 @@ from test_automation_sdk_mcp.errors import (
     RetrievalError,
 )
 from test_automation_sdk_mcp.index import ArtifactPaths, LoadedArtifacts
+from test_automation_sdk_mcp.provider import EmbeddingProfile
 from test_automation_sdk_mcp.server import (
     MAX_QUERY_LENGTH,
     SERVER_INSTRUCTIONS,
@@ -41,6 +42,10 @@ class FakeEmbeddingProvider:
     def __init__(self) -> None:
         self.inputs: list[tuple[str, ...]] = []
         self.closed = False
+
+    @property
+    def profile(self) -> EmbeddingProfile:
+        return EmbeddingProfile(EmbeddingProviderKind.OLLAMA, "fake-model")
 
     async def embed(self, inputs: Sequence[str]) -> NDArray[np.float32]:
         self.inputs.append(tuple(inputs))
@@ -88,7 +93,7 @@ def make_artifacts(tmp_path: Path, index: object | None = None, title: str = "Fi
     )
     digest = "a" * 64
     manifest = IndexManifest(
-        schema_version=1,
+        schema_version=2,
         index_type="IndexFlatL2",
         distance_metric="l2",
         embedding_provider="ollama",
@@ -452,6 +457,45 @@ def test_model_mismatch_is_rejected_before_server_start(tmp_path: Path) -> None:
         create_server(
             RuntimeConfig(model="other-model", artifact_directory=tmp_path),
             artifacts=make_artifacts(tmp_path),
+            provider=FakeEmbeddingProvider(),
+        )
+
+
+def test_provider_and_openai_model_compatibility_is_enforced(tmp_path: Path) -> None:
+    openai_manifest = make_artifacts(tmp_path).manifest.model_copy(
+        update={"embedding_provider": "openai", "embedding_model": None}
+    )
+    openai_artifacts = LoadedArtifacts(
+        make_artifacts(tmp_path).index,
+        make_artifacts(tmp_path).documents,
+        openai_manifest,
+        ArtifactPaths(tmp_path),
+    )
+    trust_config = RuntimeConfig(
+        provider=EmbeddingProviderKind.OPENAI,
+        endpoint_url="http://127.0.0.1:8080/v1/embeddings",
+        model=None,
+        artifact_directory=tmp_path,
+    )
+
+    create_server(trust_config, artifacts=openai_artifacts, provider=FakeEmbeddingProvider())
+
+    with pytest.raises(ConfigurationError, match="provider"):
+        create_server(
+            RuntimeConfig(model="fake-model", artifact_directory=tmp_path),
+            artifacts=openai_artifacts,
+            provider=FakeEmbeddingProvider(),
+        )
+
+    with pytest.raises(ConfigurationError, match="model"):
+        create_server(
+            RuntimeConfig(
+                provider=EmbeddingProviderKind.OPENAI,
+                endpoint_url="http://127.0.0.1:8080/v1/embeddings",
+                model="configured-model",
+                artifact_directory=tmp_path,
+            ),
+            artifacts=openai_artifacts,
             provider=FakeEmbeddingProvider(),
         )
 

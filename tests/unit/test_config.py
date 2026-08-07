@@ -9,6 +9,7 @@ from test_automation_sdk_mcp.config import (
     DEFAULT_MODEL,
     DEFAULT_REQUEST_TIMEOUT,
     DEFAULT_RESULT_COUNT,
+    EmbeddingProviderKind,
     RuntimeConfig,
     runtime_config_from_environment,
 )
@@ -87,3 +88,47 @@ def test_configuration_error_does_not_echo_api_key() -> None:
         RuntimeConfig(endpoint_url="not-a-url", api_key=secret)
 
     assert secret not in str(raised.value)
+
+
+def test_openai_configuration_selects_only_openai_values_and_supports_trust_mode() -> None:
+    secret = "openai-secret-token"
+    config = runtime_config_from_environment(
+        {
+            "TA_SDK_EMBEDDING_PROVIDER": " OPENAI ",
+            "TA_SDK_OPENAI_URL": "https://embedding.example.test/v1/embeddings///",
+            "TA_SDK_OPENAI_MODEL": " endpoint-model ",
+            "TA_SDK_OPENAI_API_KEY": secret,
+            "TA_SDK_OLLAMA_URL": "https://ignored.example.test",
+            "TA_SDK_OLLAMA_MODEL": "ignored-model",
+            "TA_SDK_OLLAMA_API_KEY": "ignored-secret",
+        }
+    )
+
+    assert config.provider is EmbeddingProviderKind.OPENAI
+    assert config.endpoint_url == "https://embedding.example.test/v1/embeddings"
+    assert config.model == "endpoint-model"
+    assert config.api_key == secret
+    assert secret not in repr(config)
+
+    trust_config = runtime_config_from_environment(
+        {
+            "TA_SDK_EMBEDDING_PROVIDER": "openai",
+            "TA_SDK_OPENAI_URL": "http://127.0.0.1:8080/v1/embeddings",
+        }
+    )
+    assert trust_config.model is None
+    assert trust_config.api_key is None
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {"TA_SDK_EMBEDDING_PROVIDER": ""},
+        {"TA_SDK_EMBEDDING_PROVIDER": "unsupported"},
+        {"TA_SDK_EMBEDDING_PROVIDER": "openai"},
+        {"TA_SDK_EMBEDDING_PROVIDER": "openai", "TA_SDK_OPENAI_URL": "https://example.test"},
+    ],
+)
+def test_invalid_openai_provider_configuration_is_rejected(environment: dict[str, str]) -> None:
+    with pytest.raises(ConfigurationError):
+        runtime_config_from_environment(environment)

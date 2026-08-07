@@ -10,15 +10,21 @@ import pytest
 
 import test_automation_sdk_mcp.build_index as build_index_module
 from test_automation_sdk_mcp.build_index import BuildResult, build_index
-from test_automation_sdk_mcp.config import DEFAULT_ARTIFACT_DIRECTORY
+from test_automation_sdk_mcp.config import DEFAULT_ARTIFACT_DIRECTORY, EmbeddingProviderKind, RuntimeConfig
 from test_automation_sdk_mcp.documents import ChunkingManifest, IndexManifest
 from test_automation_sdk_mcp.errors import IndexBuildError
 from test_automation_sdk_mcp.index import artifact_paths, load_verified_artifacts
+from test_automation_sdk_mcp.provider import EmbeddingProfile
 
 
 class TrackingProvider:
-    def __init__(self) -> None:
+    def __init__(self, model: str = "fake", provider: EmbeddingProviderKind = EmbeddingProviderKind.OLLAMA) -> None:
         self.calls: list[tuple[str, ...]] = []
+        self._profile = EmbeddingProfile(provider, model)
+
+    @property
+    def profile(self) -> EmbeddingProfile:
+        return self._profile
 
     async def embed(self, inputs: Sequence[str]) -> np.ndarray:
         self.calls.append(tuple(inputs))
@@ -38,7 +44,12 @@ class CapturingProvider:
         request_timeout: float,
     ) -> None:
         self.arguments = (endpoint_url, model, api_key, connect_timeout, request_timeout)
+        self._profile = EmbeddingProfile(EmbeddingProviderKind.OLLAMA, model)
         self.__class__.instances.append(self)
+
+    @property
+    def profile(self) -> EmbeddingProfile:
+        return self._profile
 
     async def __aenter__(self) -> Self:
         return self
@@ -48,6 +59,13 @@ class CapturingProvider:
 
 
 class FailingProvider:
+    def __init__(self, model: str) -> None:
+        self._profile = EmbeddingProfile(EmbeddingProviderKind.OLLAMA, model)
+
+    @property
+    def profile(self) -> EmbeddingProfile:
+        return self._profile
+
     async def embed(self, inputs: Sequence[str]) -> np.ndarray:
         raise RuntimeError("simulated embedding failure")
 
@@ -86,7 +104,7 @@ def artifact_bytes(output: Path) -> dict[str, bytes]:
 def make_result(output: Path, model: str = "fake") -> BuildResult:
     digest = "a" * 64
     manifest = IndexManifest(
-        schema_version=1,
+        schema_version=2,
         index_type="IndexFlatL2",
         distance_metric="l2",
         embedding_provider="ollama",
@@ -114,6 +132,32 @@ def test_tiny_build_batches_and_publishes_verified_artifacts(tmp_path: Path) -> 
     assert [len(call) for call in provider.calls] == [1, 1]
     assert artifacts.index.ntotal == len(artifacts.documents.documents) == 2
     assert artifacts.manifest.embedding_dimension == 768
+    assert artifacts.manifest.embedding_provider == "ollama"
+    assert artifacts.manifest.embedding_model == "fake"
+
+
+def test_builder_rejects_provider_metadata_that_disagrees_with_profile(tmp_path: Path) -> None:
+    provider = TrackingProvider("openai-model", EmbeddingProviderKind.OPENAI)
+
+    with pytest.raises(IndexBuildError, match="provider metadata"):
+        asyncio.run(
+            build_index(
+                tmp_path / "missing-source",
+                tmp_path / "provider-mismatch",
+                provider,
+                provider_kind=EmbeddingProviderKind.OLLAMA,
+            )
+        )
+
+    with pytest.raises(IndexBuildError, match="model metadata"):
+        asyncio.run(
+            build_index(
+                tmp_path / "missing-source",
+                tmp_path / "model-mismatch",
+                provider,
+                model="other-model",
+            )
+        )
 
 
 def test_cli_build_reads_runtime_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -125,7 +169,7 @@ def test_cli_build_reads_runtime_environment(monkeypatch: pytest.MonkeyPatch, tm
     captured = CapturingProvider.instances
     captured.clear()
     expected_manifest = IndexManifest(
-        schema_version=1,
+        schema_version=2,
         index_type="IndexFlatL2",
         distance_metric="l2",
         embedding_provider="ollama",
@@ -144,18 +188,26 @@ def test_cli_build_reads_runtime_environment(monkeypatch: pytest.MonkeyPatch, tm
         source_directory: Path,
         output_directory: Path,
         provider: object,
-        *,
-        model: str,
+        **_: object,
     ) -> BuildResult:
-        assert (source_directory, output_directory, provider, model) == (
+        assert (source_directory, output_directory, provider) == (
             Path("source"),
             tmp_path,
             captured[0],
-            "configured-model",
         )
         return expected_result
 
-    monkeypatch.setattr(build_index_module, "OllamaEmbeddingProvider", CapturingProvider)
+    def fake_provider_factory(config: RuntimeConfig) -> CapturingProvider:
+        assert config.model is not None
+        return CapturingProvider(
+            config.endpoint_url,
+            config.model,
+            api_key=config.api_key,
+            connect_timeout=config.connect_timeout,
+            request_timeout=config.request_timeout,
+        )
+
+    monkeypatch.setattr(build_index_module, "create_embedding_provider", fake_provider_factory)
     monkeypatch.setattr(build_index_module, "build_index", fake_build_index)
 
     result = asyncio.run(build_index_module._build_from_arguments(Path("source"), tmp_path))  # pyright: ignore[reportPrivateUsage]
@@ -225,11 +277,11 @@ def test_cli_failure_is_safe_and_returns_nonzero(
 def test_embedding_failure_preserves_existing_artifacts(tmp_path: Path) -> None:
     source = make_source(tmp_path)
     output = tmp_path / "db"
-    asyncio.run(build_index(source, output, TrackingProvider(), model="first"))
+    asyncio.run(build_index(source, output, TrackingProvider("first"), model="first"))
     before = artifact_bytes(output)
 
     with pytest.raises(IndexBuildError):
-        asyncio.run(build_index(source, output, FailingProvider(), model="second"))
+        asyncio.run(build_index(source, output, FailingProvider("second"), model="second"))
 
     assert artifact_bytes(output) == before
 
@@ -237,7 +289,7 @@ def test_embedding_failure_preserves_existing_artifacts(tmp_path: Path) -> None:
 def test_staging_failure_preserves_existing_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source = make_source(tmp_path)
     output = tmp_path / "db"
-    asyncio.run(build_index(source, output, TrackingProvider(), model="first"))
+    asyncio.run(build_index(source, output, TrackingProvider("first"), model="first"))
     before = artifact_bytes(output)
 
     def fail_staging(path: Path, index: object) -> None:
@@ -245,7 +297,7 @@ def test_staging_failure_preserves_existing_artifacts(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(build_index_module, "_write_faiss", fail_staging)
     with pytest.raises(IndexBuildError):
-        asyncio.run(build_index(source, output, TrackingProvider(), model="second"))
+        asyncio.run(build_index(source, output, TrackingProvider("second"), model="second"))
 
     assert artifact_bytes(output) == before
 
@@ -253,7 +305,7 @@ def test_staging_failure_preserves_existing_artifacts(monkeypatch: pytest.Monkey
 def test_mid_publication_failure_rolls_back_all_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source = make_source(tmp_path)
     output = tmp_path / "db"
-    asyncio.run(build_index(source, output, TrackingProvider(), model="first"))
+    asyncio.run(build_index(source, output, TrackingProvider("first"), model="first"))
     before = artifact_bytes(output)
     original_replace = os.replace
     replace_count = 0
@@ -267,7 +319,7 @@ def test_mid_publication_failure_rolls_back_all_artifacts(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(build_index_module.os, "replace", fail_mid_publication)
     with pytest.raises(IndexBuildError):
-        asyncio.run(build_index(source, output, TrackingProvider(), model="second"))
+        asyncio.run(build_index(source, output, TrackingProvider("second"), model="second"))
 
     assert replace_count == 8  # Five publication attempts plus three rollback restores.
     assert artifact_bytes(output) == before

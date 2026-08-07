@@ -14,9 +14,15 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from numpy.typing import NDArray
 
 from test_automation_sdk_mcp.build_index import build_index
+from test_automation_sdk_mcp.config import EmbeddingProviderKind
+from test_automation_sdk_mcp.provider import EmbeddingProfile
 
 
 class StaticEmbeddingProvider:
+    @property
+    def profile(self) -> EmbeddingProfile:
+        return EmbeddingProfile(EmbeddingProviderKind.OLLAMA, "fake-model")
+
     async def embed(self, inputs: Sequence[str]) -> NDArray[np.float32]:
         return np.zeros((len(inputs), 768), dtype=np.float32)
 

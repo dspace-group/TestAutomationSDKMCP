@@ -9,12 +9,18 @@ import pytest
 from numpy.typing import NDArray
 
 from test_automation_sdk_mcp.build_index import build_index
+from test_automation_sdk_mcp.config import EmbeddingProviderKind
 from test_automation_sdk_mcp.documents import ChunkingManifest, DocumentRecord, DocumentStore, IndexManifest
 from test_automation_sdk_mcp.errors import ArtifactError
 from test_automation_sdk_mcp.index import load_verified_artifacts, validate_faiss_index
+from test_automation_sdk_mcp.provider import EmbeddingProfile
 
 
 class FakeEmbeddingProvider:
+    @property
+    def profile(self) -> EmbeddingProfile:
+        return EmbeddingProfile(EmbeddingProviderKind.OLLAMA, "fake")
+
     async def embed(self, inputs: Sequence[str]) -> NDArray[np.float32]:
         return np.zeros((len(inputs), 768), dtype=np.float32)
 
@@ -94,7 +100,7 @@ def test_validate_faiss_rejects_wrong_type_dimension_and_count(tmp_path: Path) -
 def test_validate_faiss_rejects_document_count_mismatch() -> None:
     digest = "a" * 64
     manifest = IndexManifest(
-        schema_version=1,
+        schema_version=2,
         index_type="IndexFlatL2",
         distance_metric="l2",
         embedding_provider="ollama",

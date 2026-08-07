@@ -3,6 +3,7 @@
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 from math import isfinite
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -17,6 +18,13 @@ DEFAULT_ARTIFACT_DIRECTORY = Path(__file__).parent / "db"
 DEFAULT_CONNECT_TIMEOUT = 5.0
 DEFAULT_REQUEST_TIMEOUT = 30.0
 MAX_TIMEOUT = 300.0
+
+
+class EmbeddingProviderKind(str, Enum):
+    """Supported embedding provider kinds."""
+
+    OLLAMA = "ollama"
+    OPENAI = "openai"
 
 
 def _validate_endpoint(value: object) -> str:
@@ -48,6 +56,15 @@ def _validate_model(value: object) -> str:
     if not isinstance(value, str) or not value.strip() or any(ord(char) < 32 for char in value):
         raise ConfigurationError("model must be a non-empty model name.")
     return value.strip()
+
+
+def _parse_provider(value: object) -> EmbeddingProviderKind:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError("embedding provider must be ollama or openai.")
+    try:
+        return EmbeddingProviderKind(value.strip().lower())
+    except ValueError as error:
+        raise ConfigurationError("embedding provider must be ollama or openai.") from error
 
 
 def _validate_api_key(value: object) -> str | None:
@@ -94,16 +111,29 @@ class RuntimeConfig:
     """Validated values required by the runtime and artifact loader."""
 
     endpoint_url: str = DEFAULT_ENDPOINT_URL
-    model: str = DEFAULT_MODEL
+    model: str | None = DEFAULT_MODEL
     api_key: str | None = field(default=None, repr=False)
     result_count: int = DEFAULT_RESULT_COUNT
     artifact_directory: Path = field(default_factory=lambda: DEFAULT_ARTIFACT_DIRECTORY)
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT
+    provider: EmbeddingProviderKind = EmbeddingProviderKind.OLLAMA
 
     def __post_init__(self) -> None:
+        provider = _parse_provider(self.provider)
+        object.__setattr__(self, "provider", provider)
         object.__setattr__(self, "endpoint_url", _validate_endpoint(self.endpoint_url))
-        object.__setattr__(self, "model", _validate_model(self.model))
+        if provider is EmbeddingProviderKind.OLLAMA:
+            if self.model is None:
+                raise ConfigurationError("Ollama embedding model is required.")
+            object.__setattr__(self, "model", _validate_model(self.model))
+        elif self.model is not None:
+            object.__setattr__(self, "model", _validate_model(self.model))
+        if (
+            provider is EmbeddingProviderKind.OPENAI
+            and urlsplit(self.endpoint_url).path.rstrip("/") != "/v1/embeddings"
+        ):
+            raise ConfigurationError("OpenAI endpoint_url must include /v1/embeddings.")
         object.__setattr__(self, "api_key", _validate_api_key(self.api_key))
         object.__setattr__(self, "result_count", _validate_result_count(self.result_count))
         object.__setattr__(self, "artifact_directory", _validate_artifact_directory(self.artifact_directory))
@@ -135,14 +165,26 @@ def runtime_config_from_environment(environ: Mapping[str, str] | None = None) ->
     """Parse `TA_SDK_*` variables without reading the environment at import time."""
 
     values = os.environ if environ is None else environ
+    provider = _parse_provider(values.get("TA_SDK_EMBEDDING_PROVIDER", EmbeddingProviderKind.OLLAMA.value))
     result_count = values.get("TA_SDK_RESULT_COUNT")
     connect_timeout = values.get("TA_SDK_CONNECT_TIMEOUT")
     request_timeout = values.get("TA_SDK_REQUEST_TIMEOUT")
     artifact_directory = values.get("TA_SDK_DB_DIR")
+    if provider is EmbeddingProviderKind.OLLAMA:
+        endpoint_url = values.get("TA_SDK_OLLAMA_URL", DEFAULT_ENDPOINT_URL)
+        model = values.get("TA_SDK_OLLAMA_MODEL", DEFAULT_MODEL)
+        api_key = values.get("TA_SDK_OLLAMA_API_KEY") or None
+    else:
+        endpoint_url = values.get("TA_SDK_OPENAI_URL")
+        if endpoint_url is None or not endpoint_url.strip():
+            raise ConfigurationError("TA_SDK_OPENAI_URL is required for the openai provider.")
+        model_value = values.get("TA_SDK_OPENAI_MODEL")
+        model = None if model_value is None else _validate_model(model_value)
+        api_key = values.get("TA_SDK_OPENAI_API_KEY") or None
     return RuntimeConfig(
-        endpoint_url=values.get("TA_SDK_OLLAMA_URL", DEFAULT_ENDPOINT_URL),
-        model=values.get("TA_SDK_OLLAMA_MODEL", DEFAULT_MODEL),
-        api_key=values.get("TA_SDK_OLLAMA_API_KEY") or None,
+        endpoint_url=endpoint_url,
+        model=model,
+        api_key=api_key,
         result_count=DEFAULT_RESULT_COUNT if result_count is None else _parse_int(result_count, "result_count"),
         artifact_directory=DEFAULT_ARTIFACT_DIRECTORY if artifact_directory is None else Path(artifact_directory),
         connect_timeout=(
@@ -151,6 +193,7 @@ def runtime_config_from_environment(environ: Mapping[str, str] | None = None) ->
         request_timeout=(
             DEFAULT_REQUEST_TIMEOUT if request_timeout is None else _parse_float(request_timeout, "request_timeout")
         ),
+        provider=provider,
     )
 
 

@@ -7,13 +7,14 @@ of their enclosing ``IndexManifest`` or ``DocumentStore``.
 
 import json
 from pathlib import Path
-from typing import Literal, Self, TypeGuard
+from typing import Literal, Self, TypeGuard, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .errors import ArtifactError
 
-ARTIFACT_SCHEMA_VERSION = 1
+DOCUMENT_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 EMBEDDING_DIMENSION = 768
 SHA256_LENGTH = 64
 
@@ -68,7 +69,7 @@ class DocumentRecord(_BoundaryModel):
 class DocumentStore(_BoundaryModel):
     """Versioned document metadata whose array order maps to FAISS row IDs."""
 
-    schema_version: Literal[1] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[1] = DOCUMENT_SCHEMA_VERSION
     documents: tuple[DocumentRecord, ...]
 
     @field_validator("documents", mode="before")
@@ -89,11 +90,11 @@ class DocumentStore(_BoundaryModel):
 class IndexManifest(_BoundaryModel):
     """Versioned metadata describing one generated embedding index."""
 
-    schema_version: Literal[1] = ARTIFACT_SCHEMA_VERSION
+    schema_version: Literal[2] = MANIFEST_SCHEMA_VERSION
     index_type: Literal["IndexFlatL2"]
     distance_metric: Literal["l2"]
-    embedding_provider: Literal["ollama"]
-    embedding_model: str
+    embedding_provider: Literal["ollama", "openai"]
+    embedding_model: str | None
     embedding_dimension: int = Field(ge=1)
     document_count: int = Field(ge=0)
     search_json_sha256: str
@@ -104,10 +105,18 @@ class IndexManifest(_BoundaryModel):
 
     @field_validator("embedding_model")
     @classmethod
-    def validate_model_name(cls, value: str) -> str:
+    def validate_model_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         if not value.strip() or any(ord(char) < 32 for char in value):
             raise ValueError("embedding_model must be a non-empty model name")
         return value
+
+    @model_validator(mode="after")
+    def validate_provider_model(self) -> Self:
+        if self.embedding_provider == "ollama" and self.embedding_model is None:
+            raise ValueError("Ollama artifacts must record an embedding model")
+        return self
 
     @field_validator("embedding_dimension")
     @classmethod
@@ -137,6 +146,12 @@ def _load_json(path: Path) -> object:
 
 def _load_model(path: Path, model_type: type[DocumentStore] | type[IndexManifest]) -> DocumentStore | IndexManifest:
     payload = _load_json(path)
+    if model_type is IndexManifest and isinstance(payload, dict):
+        manifest_payload = cast(dict[str, object], payload)
+        if manifest_payload.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+            raise ArtifactError(
+                "Index manifest schema is obsolete; rebuild the index with this version of the package."
+            )
     try:
         return model_type.model_validate(payload)
     except ValidationError as error:

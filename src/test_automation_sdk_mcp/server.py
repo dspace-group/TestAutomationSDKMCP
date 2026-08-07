@@ -16,11 +16,12 @@ from mcp.types import ToolAnnotations
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from .config import DEFAULT_ARTIFACT_DIRECTORY, RuntimeConfig
+from .config import DEFAULT_ARTIFACT_DIRECTORY, EmbeddingProviderKind, RuntimeConfig
 from .documents import EMBEDDING_DIMENSION
 from .errors import ApplicationErrorCode, ConfigurationError, RetrievalError, TestAutomationSDKError, to_mcp_error
 from .index import LoadedArtifacts, load_packaged_artifacts, load_verified_artifacts
-from .ollama import EmbeddingProvider, OllamaEmbeddingProvider
+from .provider import EmbeddingProvider
+from .provider.factory import create_embedding_provider
 
 MAX_QUERY_LENGTH = 4_000
 
@@ -39,8 +40,9 @@ TOOL_DESCRIPTION = (
     "development. Use for exact APIs and patterns involving TestEnvironmentAccess or the ta fixture, variables, "
     "ports, Capturing or MultiPortCapturing, rasters and triggers, Scenario parameterization and lifecycle, "
     "synchronization, or capture result analysis. Do not use for generic Python or pytest questions or unrelated "
-    "dSPACE products. Preconditions: verified packaged artifacts are loaded, the configured embedding model matches "
-    "the index, and the configured Ollama-compatible endpoint is reachable and supports /api/embed. Success returns "
+    "dSPACE products. Preconditions: verified packaged artifacts are loaded, the configured embedding provider and "
+    "model match the index, and the configured embedding endpoint is reachable (/api/embed or /v1/embeddings). "
+    "Success returns "
     "nearest-first documentation snippets with source locations and uncalibrated FAISS L2 distances. Public failures "
     "are invalid_query (permanent), embedding_request_timed_out (transient), embedding_service_unavailable "
     "(transient), embedding_service_rejected_request (permanent), embedding_service_failure (transient), "
@@ -257,13 +259,19 @@ class DocumentationRetriever:
 
 
 def _default_provider_factory(config: RuntimeConfig) -> EmbeddingProvider:
-    return OllamaEmbeddingProvider(
-        config.endpoint_url,
-        config.model,
-        api_key=config.api_key,
-        connect_timeout=config.connect_timeout,
-        request_timeout=config.request_timeout,
-    )
+    return create_embedding_provider(config)
+
+
+def _validate_artifact_compatibility(config: RuntimeConfig, artifacts: LoadedArtifacts) -> None:
+    if artifacts.manifest.embedding_provider != config.provider.value:
+        raise ConfigurationError("Configured embedding provider does not match the documentation index.")
+    if config.provider is EmbeddingProviderKind.OLLAMA:
+        if artifacts.manifest.embedding_model != config.model:
+            raise ConfigurationError("Configured embedding model does not match the documentation index.")
+    elif config.model is not None and (
+        artifacts.manifest.embedding_model is None or artifacts.manifest.embedding_model != config.model
+    ):
+        raise ConfigurationError("Configured embedding model does not match the documentation index.")
 
 
 async def _close_provider(provider: EmbeddingProvider) -> None:
@@ -299,8 +307,7 @@ def create_server(
         loaded_artifacts = load_packaged_artifacts()
     else:
         loaded_artifacts = load_verified_artifacts(runtime_config.artifact_directory)
-    if loaded_artifacts.manifest.embedding_model != runtime_config.model:
-        raise ConfigurationError("Configured embedding model does not match the documentation index.")
+    _validate_artifact_compatibility(runtime_config, loaded_artifacts)
     factory = _default_provider_factory if provider_factory is None else provider_factory
     direct_retriever = (
         None

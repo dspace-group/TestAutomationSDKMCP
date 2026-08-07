@@ -32,7 +32,7 @@ def make_document(document_id: str = "document-1", chunk_index: int = 0) -> Docu
 def make_manifest(document_count: int = 1, embedding_dimension: int = 768) -> IndexManifest:
     digest = "a" * 64
     return IndexManifest(
-        schema_version=1,
+        schema_version=2,
         index_type="IndexFlatL2",
         distance_metric="l2",
         embedding_provider="ollama",
@@ -101,7 +101,7 @@ def test_document_store_rejects_unknown_and_wrong_schema_fields(payload: dict[st
 
 def test_index_manifest_rejects_unknown_fields_and_wrong_schema_version() -> None:
     payload = make_manifest().model_dump()
-    payload["schema_version"] = 2
+    payload["schema_version"] = 1
     with pytest.raises(ValidationError):
         IndexManifest.model_validate(payload)
 
@@ -127,6 +127,51 @@ def test_json_loaders_validate_once_and_translate_failures(tmp_path: Path) -> No
     with pytest.raises(ArtifactError) as raised:
         load_document_store(documents_path)
     assert isinstance(raised.value.__cause__, json.JSONDecodeError)
+
+
+def test_openai_trust_mode_manifest_round_trips_with_null_model(tmp_path: Path) -> None:
+    digest = "b" * 64
+    manifest = IndexManifest(
+        schema_version=2,
+        index_type="IndexFlatL2",
+        distance_metric="l2",
+        embedding_provider="openai",
+        embedding_model=None,
+        embedding_dimension=768,
+        document_count=0,
+        search_json_sha256=digest,
+        html_tree_sha256=digest,
+        faiss_sha256=digest,
+        documents_sha256=digest,
+        chunking=ChunkingManifest(max_characters=1000, overlap_characters=200),
+    )
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest.model_dump(mode="json")), encoding="utf-8")
+
+    assert load_index_manifest(path) == manifest
+
+
+@pytest.mark.parametrize(
+    "provider, model",
+    [("ollama", None), ("openai", "")],
+)
+def test_manifest_enforces_provider_model_binding(provider: str, model: str | None) -> None:
+    digest = "c" * 64
+    with pytest.raises(ValidationError):
+        IndexManifest(
+            schema_version=2,
+            index_type="IndexFlatL2",
+            distance_metric="l2",
+            embedding_provider=provider,  # type: ignore[arg-type]
+            embedding_model=model,
+            embedding_dimension=768,
+            document_count=0,
+            search_json_sha256=digest,
+            html_tree_sha256=digest,
+            faiss_sha256=digest,
+            documents_sha256=digest,
+            chunking=ChunkingManifest(max_characters=1000, overlap_characters=200),
+        )
 
 
 def test_count_mismatch_is_rejected_without_exposing_paths() -> None:

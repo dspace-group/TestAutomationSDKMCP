@@ -162,6 +162,7 @@ def test_batches_preserve_input_order_and_return_contiguous_float32_matrix() -> 
         ({"embeddings": [["not-a-number"] * EMBEDDING_DIMENSION]}, "invalid response"),
         ({"embeddings": [[0.0] * (EMBEDDING_DIMENSION - 1)]}, "768 dimensions"),
         ({"embeddings": [[float("nan")] * EMBEDDING_DIMENSION]}, "invalid vector values"),
+        ({"embeddings": [[10**400] * EMBEDDING_DIMENSION]}, "invalid vector values"),
     ],
 )
 def test_response_validation_errors_are_safe(payload: object, message: str) -> None:
