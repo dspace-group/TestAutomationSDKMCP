@@ -50,6 +50,22 @@ class FakeEmbeddingProvider:
         self.closed = True
 
 
+class BlockingEmbeddingProvider(FakeEmbeddingProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def embed(self, inputs: Sequence[str]) -> NDArray[np.float32]:
+        self.started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        raise AssertionError("blocking embedding request completed unexpectedly")
+
+
 class FakeSearchIndex:
     def __init__(self, row_id: int) -> None:
         self.ntotal = 1
@@ -166,13 +182,20 @@ def test_server_exposes_one_strict_annotated_structured_tool(tmp_path: Path) -> 
     for declared_term in (
         "verified packaged artifacts",
         "/api/embed",
+        "connect and request timeouts",
+        "cancellation propagates",
+        "does not retry",
         "nearest-first",
         "uncalibrated",
         "bounded backoff",
     ):
         assert declared_term in tool.description  # type: ignore[operator]
     assert tool.input_schema["required"] == ["query"]  # type: ignore[union-attr]
-    assert tool.input_schema["properties"]["query"]["type"] == "string"  # type: ignore[union-attr]
+    query_schema = tool.input_schema["properties"]["query"]  # type: ignore[union-attr]
+    assert query_schema["type"] == "string"
+    assert query_schema["minLength"] == 1
+    assert query_schema["maxLength"] == MAX_QUERY_LENGTH
+    assert query_schema["pattern"] == r"\S"
     assert "self-contained Test Automation SDK question" in tool.input_schema["properties"]["query"]["description"]  # type: ignore[union-attr]
     assert tool.output_schema is not None  # type: ignore[union-attr]
     assert tool.output_schema["type"] == "object"  # type: ignore[union-attr]
@@ -228,6 +251,25 @@ def test_tool_translates_query_errors_to_native_mcp_errors(tmp_path: Path, query
         "classification": "permanent",
         "retryable": False,
     }
+
+
+def test_tool_cancellation_reaches_in_flight_embedding_request(tmp_path: Path) -> None:
+    provider = BlockingEmbeddingProvider()
+    server = create_server(
+        RuntimeConfig(model="fake-model", artifact_directory=tmp_path),
+        artifacts=make_artifacts(tmp_path),
+        provider=provider,
+    )
+
+    async def exercise() -> None:
+        invocation = asyncio.create_task(server.call_tool("retrieve_documentation", {"query": "query"}))
+        await provider.started.wait()
+        invocation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await invocation
+
+    run(exercise())
+    assert provider.cancelled
 
 
 class FailingEmbeddingProvider(FakeEmbeddingProvider):

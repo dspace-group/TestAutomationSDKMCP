@@ -43,6 +43,9 @@ TOOL_DESCRIPTION = (
     "dSPACE products. Preconditions: verified packaged artifacts are loaded and the configured embedding endpoint "
     "is reachable (/api/embed or /v1/embeddings). The manifest provider and model describe build provenance; "
     "runtime embedding-space compatibility is the operator's responsibility. "
+    "Embedding HTTP calls use configured connect and request timeouts (defaults: 5 and 30 seconds; maximum: 300 "
+    "seconds), and MCP cancellation propagates to an in-flight asynchronous request. The server does not retry "
+    "embedding requests internally. "
     "Success returns "
     "nearest-first documentation snippets with source locations and uncalibrated FAISS L2 distances. Public failures "
     "are invalid_query (permanent), embedding_request_timed_out (transient), embedding_service_unavailable "
@@ -338,6 +341,7 @@ def create_server(
             str,
             Field(
                 strict=True,
+                json_schema_extra={"minLength": 1, "maxLength": MAX_QUERY_LENGTH, "pattern": r"\S"},
                 description=(
                     "One self-contained Test Automation SDK question or test-development task, including relevant "
                     "API names, SDK concepts, desired behavior, or error details."
