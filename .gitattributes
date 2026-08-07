@@ -1,0 +1,3 @@
+src/test_automation_sdk_mcp/db/TA_Docu.faiss -text
+src/test_automation_sdk_mcp/db/TA_Docu.documents.json -text
+src/test_automation_sdk_mcp/db/TA_Docu.manifest.json -text
