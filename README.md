@@ -9,20 +9,20 @@ index at startup.
 
 - Python 3.12, 3.13, or 3.14.
 - An Ollama-compatible or OpenAI-compatible embedding endpoint.
-- The packaged index was built with Ollama and
-	`nomic-embed-text:v1.5`. An OpenAI-compatible endpoint can query that same
-	index; embedding-space compatibility is an operator responsibility.
 - `uv` for development, index maintenance, and wheel verification.
 
 For a local Ollama installation, make sure the Ollama service is running and
 pull the pinned model:
 
-```powershell
+```sh
 ollama pull nomic-embed-text:v1.5
 ```
 
 The server uses Ollama's `/api/embed` endpoint. `ollama pull` installs the
 model. The MCP server connects to the configured service directly.
+
+The packaged index was built with Ollama and `nomic-embed-text:v1.5`. An OpenAI-compatible endpoint can query that same index, but compatibility is an
+operator responsibility ([Optional Compatibility Check](#optional-compatibility-check)).
 
 ## Installation
 
@@ -53,7 +53,7 @@ arguments to the MCP server. `uv` must be installed and available on `PATH`.
 For a user who does not want a repository checkout, download the release
 `*.whl` and install it as a globally callable `uv` tool:
 
-```powershell
+```sh
 uv tool install .\test_automation_sdk_mcp-0.1.0-py3-none-any.whl
 test-automation-sdk-mcp
 ```
@@ -180,7 +180,7 @@ conversion, quantization, or backend settings.
 
 ### Local Ollama
 
-```powershell
+```sh
 $env:TA_SDK_OLLAMA_URL = "http://127.0.0.1:11434"
 $env:TA_SDK_OLLAMA_MODEL = "nomic-embed-text:v1.5"
 ollama pull nomic-embed-text:v1.5
@@ -189,7 +189,7 @@ test-automation-sdk-mcp
 
 ### Centrally Hosted Ollama-Compatible Endpoint
 
-```powershell
+```sh
 $env:TA_SDK_OLLAMA_URL = "https://embeddings.example.test"
 $env:TA_SDK_OLLAMA_MODEL = "nomic-embed-text:v1.5"
 $env:TA_SDK_OLLAMA_API_KEY = "set-this-through-your-secret-store"
@@ -204,7 +204,7 @@ when supplied, and return one finite 768-value vector for each input.
 The OpenAI-compatible URL is the complete embeddings endpoint. Set the model
 when the endpoint supports or requires explicit model selection:
 
-```powershell
+```sh
 $env:TA_SDK_EMBEDDING_PROVIDER = "openai"
 $env:TA_SDK_OPENAI_URL = "http://127.0.0.1:8080/v1/embeddings"
 $env:TA_SDK_OPENAI_MODEL = "nomic-embed-text-v1.5.Q8_0.gguf"
@@ -217,7 +217,7 @@ are all that is required. If the endpoint always serves one active model, omit
 
 ### Authenticated Remote OpenAI-Compatible Endpoint
 
-```powershell
+```sh
 $env:TA_SDK_EMBEDDING_PROVIDER = "openai"
 $env:TA_SDK_OPENAI_URL = "https://embeddings.example.test/v1/embeddings"
 $env:TA_SDK_OPENAI_MODEL = "approved-embedding-model"
@@ -233,7 +233,7 @@ request value, but neither form is compared with the packaged manifest.
 
 This measured configuration used the packaged Ollama-built index:
 
-```powershell
+```sh
 llama-server `
 	-m nomic-embed-text-v1.5.Q8_0.gguf `
 	--embedding `
@@ -262,7 +262,7 @@ Both Ollama and the candidate OpenAI-compatible endpoint must be running.
 From a repository checkout, this self-contained command uses the default local
 Ollama service and the verified llama.cpp endpoint:
 
-```powershell
+```sh
 uv run test-automation-sdk-mcp-check-embedding-compatibility `
 	--openai-url http://127.0.0.1:8080/v1/embeddings `
 	--openai-model nomic-embed-text-v1.5.Q8_0.gguf
@@ -300,7 +300,7 @@ The committed index was built from the complete `data/` tree with the default
 Ollama provider and `nomic-embed-text:v1.5`. Rebuild it when the source
 documentation or document embedding configuration changes:
 
-```powershell
+```sh
 $env:TA_SDK_OLLAMA_URL = "http://127.0.0.1:11434"
 $env:TA_SDK_OLLAMA_MODEL = "nomic-embed-text:v1.5"
 uv run test-automation-sdk-mcp-build-index `
@@ -320,7 +320,7 @@ admission does not require those values to match the query provider.
 
 Run the non-network checks first, then the marked tests with local Ollama:
 
-```powershell
+```sh
 uv run ruff check src tests
 uv run pyright
 uv run pytest -m "not ollama and not openai and not release"
@@ -332,7 +332,7 @@ uv build
 
 Run the automated clean-wheel validation separately when reviewing a release:
 
-```powershell
+```sh
 uv run pytest -m release
 ```
 
@@ -344,14 +344,14 @@ non-MCP text to stdout.
 
 Inspect the wheel and verify that all three artifacts are present:
 
-```powershell
+```sh
 uv run python -c "from zipfile import ZipFile; from pathlib import Path; wheel = next(Path('dist').glob('*.whl')); print(*[name for name in ZipFile(wheel).namelist() if '/db/' in name], sep='\n')"
 ```
 
 For a clean-install smoke test, create the environment outside the repository
 and run the console script from a different working directory:
 
-```powershell
+```sh
 $wheel = (Resolve-Path .\dist\test_automation_sdk_mcp-0.1.0-py3-none-any.whl).Path
 $releaseVenv = Join-Path $env:TEMP "test-automation-sdk-mcp-wheel"
 uv venv $releaseVenv
