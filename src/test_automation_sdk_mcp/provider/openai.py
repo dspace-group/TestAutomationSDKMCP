@@ -10,12 +10,10 @@ import numpy as np
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from ..config import EmbeddingProviderKind
 from ..errors import ApplicationErrorCode, EmbeddingError
 from .embeddings import (
     DEFAULT_BATCH_SIZE,
     EMBEDDING_DIMENSION,
-    EmbeddingProfile,
     validate_batch_size,
     validate_inputs,
     validate_model,
@@ -92,7 +90,6 @@ class OpenAIEmbeddingProvider:
     ) -> None:
         self._endpoint_url = _normalize_endpoint(endpoint_url)
         self._model = None if model is None else validate_model(model)
-        self._profile = EmbeddingProfile(EmbeddingProviderKind.OPENAI, self._model)
         self._batch_size = validate_batch_size(batch_size)
         self._closed = False
         request_timeout_value = validate_timeout(request_timeout, "request_timeout")
@@ -102,10 +99,6 @@ class OpenAIEmbeddingProvider:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         self._client = httpx.AsyncClient(headers=headers, timeout=timeout, transport=transport)
-
-    @property
-    def profile(self) -> EmbeddingProfile:
-        return self._profile
 
     async def __aenter__(self) -> Self:
         if self._closed:
@@ -168,7 +161,7 @@ class OpenAIEmbeddingProvider:
             raise _invalid_response("Embedding service returned invalid JSON.") from error
         try:
             parsed = OpenAIEmbeddingResponse.model_validate(response_payload)
-        except ValidationError as error:
+        except (OverflowError, TypeError, ValueError, ValidationError) as error:
             raise _invalid_response("Embedding service returned an invalid response.") from error
 
         if self._model is not None and parsed.model is not None and parsed.model != self._model:

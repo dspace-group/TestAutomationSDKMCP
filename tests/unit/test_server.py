@@ -23,12 +23,11 @@ from test_automation_sdk_mcp.documents import ChunkingManifest, DocumentRecord, 
 from test_automation_sdk_mcp.errors import (
     TOOL_EXECUTION_ERROR,
     ApplicationErrorCode,
-    ConfigurationError,
     EmbeddingError,
     RetrievalError,
 )
 from test_automation_sdk_mcp.index import ArtifactPaths, LoadedArtifacts
-from test_automation_sdk_mcp.provider import EmbeddingProfile
+from test_automation_sdk_mcp.provider import EmbeddingProvenance
 from test_automation_sdk_mcp.server import (
     MAX_QUERY_LENGTH,
     SERVER_INSTRUCTIONS,
@@ -42,10 +41,6 @@ class FakeEmbeddingProvider:
     def __init__(self) -> None:
         self.inputs: list[tuple[str, ...]] = []
         self.closed = False
-
-    @property
-    def profile(self) -> EmbeddingProfile:
-        return EmbeddingProfile(EmbeddingProviderKind.OLLAMA, "fake-model")
 
     async def embed(self, inputs: Sequence[str]) -> NDArray[np.float32]:
         self.inputs.append(tuple(inputs))
@@ -362,7 +357,14 @@ def test_server_startup_does_not_change_artifact_bytes_hashes_or_mtimes(tmp_path
         encoding="utf-8",
     )
     output = tmp_path / "db"
-    run(build_index(source, output, FakeEmbeddingProvider(), model="fake-model"))
+    run(
+        build_index(
+            source,
+            output,
+            FakeEmbeddingProvider(),
+            EmbeddingProvenance(EmbeddingProviderKind.OLLAMA, "fake-model"),
+        )
+    )
     paths = (output / "TA_Docu.faiss", output / "TA_Docu.documents.json", output / "TA_Docu.manifest.json")
     before = {
         path.name: (path.read_bytes(), sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns) for path in paths
@@ -452,16 +454,15 @@ def test_client_session_raises_safe_protocol_error_for_embedding_failure(tmp_pat
     assert "private provider response" not in str(error.error)
 
 
-def test_model_mismatch_is_rejected_before_server_start(tmp_path: Path) -> None:
-    with pytest.raises(ConfigurationError, match="does not match"):
-        create_server(
-            RuntimeConfig(model="other-model", artifact_directory=tmp_path),
-            artifacts=make_artifacts(tmp_path),
-            provider=FakeEmbeddingProvider(),
-        )
+def test_runtime_accepts_differing_model_provenance(tmp_path: Path) -> None:
+    create_server(
+        RuntimeConfig(model="other-model", artifact_directory=tmp_path),
+        artifacts=make_artifacts(tmp_path),
+        provider=FakeEmbeddingProvider(),
+    )
 
 
-def test_provider_and_openai_model_compatibility_is_enforced(tmp_path: Path) -> None:
+def test_runtime_accepts_openai_against_ollama_manifest(tmp_path: Path) -> None:
     openai_manifest = make_artifacts(tmp_path).manifest.model_copy(
         update={"embedding_provider": "openai", "embedding_model": None}
     )
@@ -479,25 +480,21 @@ def test_provider_and_openai_model_compatibility_is_enforced(tmp_path: Path) -> 
     )
 
     create_server(trust_config, artifacts=openai_artifacts, provider=FakeEmbeddingProvider())
-
-    with pytest.raises(ConfigurationError, match="provider"):
-        create_server(
-            RuntimeConfig(model="fake-model", artifact_directory=tmp_path),
-            artifacts=openai_artifacts,
-            provider=FakeEmbeddingProvider(),
-        )
-
-    with pytest.raises(ConfigurationError, match="model"):
-        create_server(
-            RuntimeConfig(
-                provider=EmbeddingProviderKind.OPENAI,
-                endpoint_url="http://127.0.0.1:8080/v1/embeddings",
-                model="configured-model",
-                artifact_directory=tmp_path,
-            ),
-            artifacts=openai_artifacts,
-            provider=FakeEmbeddingProvider(),
-        )
+    create_server(
+        RuntimeConfig(model="fake-model", artifact_directory=tmp_path),
+        artifacts=openai_artifacts,
+        provider=FakeEmbeddingProvider(),
+    )
+    create_server(
+        RuntimeConfig(
+            provider=EmbeddingProviderKind.OPENAI,
+            endpoint_url="http://127.0.0.1:8080/v1/embeddings",
+            model="configured-model",
+            artifact_directory=tmp_path,
+        ),
+        artifacts=openai_artifacts,
+        provider=FakeEmbeddingProvider(),
+    )
 
 
 def test_provider_is_closed_on_normal_and_exceptional_lifespan_exit(tmp_path: Path) -> None:

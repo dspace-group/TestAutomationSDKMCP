@@ -13,14 +13,10 @@ from test_automation_sdk_mcp.config import EmbeddingProviderKind
 from test_automation_sdk_mcp.documents import ChunkingManifest, DocumentRecord, DocumentStore, IndexManifest
 from test_automation_sdk_mcp.errors import ArtifactError
 from test_automation_sdk_mcp.index import load_verified_artifacts, validate_faiss_index
-from test_automation_sdk_mcp.provider import EmbeddingProfile
+from test_automation_sdk_mcp.provider import EmbeddingProvenance
 
 
 class FakeEmbeddingProvider:
-    @property
-    def profile(self) -> EmbeddingProfile:
-        return EmbeddingProfile(EmbeddingProviderKind.OLLAMA, "fake")
-
     async def embed(self, inputs: Sequence[str]) -> NDArray[np.float32]:
         return np.zeros((len(inputs), 768), dtype=np.float32)
 
@@ -49,10 +45,14 @@ def make_source(root: Path) -> Path:
     return source
 
 
+def provenance() -> EmbeddingProvenance:
+    return EmbeddingProvenance(EmbeddingProviderKind.OLLAMA, "fake")
+
+
 def test_verified_loader_rejects_tampered_documents(tmp_path: Path) -> None:
     source = make_source(tmp_path)
     output = tmp_path / "db"
-    asyncio.run(build_index(source, output, FakeEmbeddingProvider(), model="fake"))
+    asyncio.run(build_index(source, output, FakeEmbeddingProvider(), provenance()))
     documents = output / "TA_Docu.documents.json"
     documents.write_bytes(documents.read_bytes() + b" ")
 
@@ -63,7 +63,7 @@ def test_verified_loader_rejects_tampered_documents(tmp_path: Path) -> None:
 def test_verified_loader_rejects_tampered_faiss(tmp_path: Path) -> None:
     source = make_source(tmp_path)
     output = tmp_path / "db"
-    asyncio.run(build_index(source, output, FakeEmbeddingProvider(), model="fake"))
+    asyncio.run(build_index(source, output, FakeEmbeddingProvider(), provenance()))
     faiss_path = output / "TA_Docu.faiss"
     faiss_path.write_bytes(faiss_path.read_bytes() + b"tampered")
 
@@ -75,7 +75,7 @@ def test_verified_loader_rejects_tampered_faiss(tmp_path: Path) -> None:
 def test_verified_loader_rejects_missing_artifacts(tmp_path: Path, artifact_name: str) -> None:
     source = make_source(tmp_path)
     output = tmp_path / "db"
-    asyncio.run(build_index(source, output, FakeEmbeddingProvider(), model="fake"))
+    asyncio.run(build_index(source, output, FakeEmbeddingProvider(), provenance()))
     (output / artifact_name).unlink()
 
     with pytest.raises(ArtifactError, match="missing"):
@@ -85,7 +85,7 @@ def test_verified_loader_rejects_missing_artifacts(tmp_path: Path, artifact_name
 def test_validate_faiss_rejects_wrong_type_dimension_and_count(tmp_path: Path) -> None:
     source = make_source(tmp_path)
     output = tmp_path / "db"
-    asyncio.run(build_index(source, output, FakeEmbeddingProvider(), model="fake"))
+    asyncio.run(build_index(source, output, FakeEmbeddingProvider(), provenance()))
     artifacts = load_verified_artifacts(output)
 
     with pytest.raises(ArtifactError, match="IndexFlatL2"):

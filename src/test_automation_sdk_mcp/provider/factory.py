@@ -4,12 +4,12 @@ from typing import cast
 
 from ..config import EmbeddingProviderKind, RuntimeConfig
 from ..errors import ConfigurationError
-from .embeddings import EmbeddingProviderWithProfile
+from .embeddings import EmbeddingProvider
 from .ollama import OllamaEmbeddingProvider
 from .openai import OpenAIEmbeddingProvider
 
 
-def create_embedding_provider(config: RuntimeConfig) -> EmbeddingProviderWithProfile:
+def create_embedding_provider(config: RuntimeConfig) -> EmbeddingProvider:
     """Create the configured provider without reading environment state."""
 
     if config.provider is EmbeddingProviderKind.OLLAMA:

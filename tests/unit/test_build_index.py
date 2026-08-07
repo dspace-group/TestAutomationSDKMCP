@@ -14,17 +14,12 @@ from test_automation_sdk_mcp.config import DEFAULT_ARTIFACT_DIRECTORY, Embedding
 from test_automation_sdk_mcp.documents import ChunkingManifest, IndexManifest
 from test_automation_sdk_mcp.errors import IndexBuildError
 from test_automation_sdk_mcp.index import artifact_paths, load_verified_artifacts
-from test_automation_sdk_mcp.provider import EmbeddingProfile
+from test_automation_sdk_mcp.provider import EmbeddingProvenance
 
 
 class TrackingProvider:
-    def __init__(self, model: str = "fake", provider: EmbeddingProviderKind = EmbeddingProviderKind.OLLAMA) -> None:
+    def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []
-        self._profile = EmbeddingProfile(provider, model)
-
-    @property
-    def profile(self) -> EmbeddingProfile:
-        return self._profile
 
     async def embed(self, inputs: Sequence[str]) -> np.ndarray:
         self.calls.append(tuple(inputs))
@@ -44,12 +39,7 @@ class CapturingProvider:
         request_timeout: float,
     ) -> None:
         self.arguments = (endpoint_url, model, api_key, connect_timeout, request_timeout)
-        self._profile = EmbeddingProfile(EmbeddingProviderKind.OLLAMA, model)
         self.__class__.instances.append(self)
-
-    @property
-    def profile(self) -> EmbeddingProfile:
-        return self._profile
 
     async def __aenter__(self) -> Self:
         return self
@@ -59,13 +49,6 @@ class CapturingProvider:
 
 
 class FailingProvider:
-    def __init__(self, model: str) -> None:
-        self._profile = EmbeddingProfile(EmbeddingProviderKind.OLLAMA, model)
-
-    @property
-    def profile(self) -> EmbeddingProfile:
-        return self._profile
-
     async def embed(self, inputs: Sequence[str]) -> np.ndarray:
         raise RuntimeError("simulated embedding failure")
 
@@ -120,11 +103,15 @@ def make_result(output: Path, model: str = "fake") -> BuildResult:
     return BuildResult(manifest, 2, 2, output)
 
 
+def provenance(model: str) -> EmbeddingProvenance:
+    return EmbeddingProvenance(EmbeddingProviderKind.OLLAMA, model)
+
+
 def test_tiny_build_batches_and_publishes_verified_artifacts(tmp_path: Path) -> None:
     provider = TrackingProvider()
     output = tmp_path / "db"
 
-    result = asyncio.run(build_index(make_source(tmp_path), output, provider, model="fake", batch_size=1))
+    result = asyncio.run(build_index(make_source(tmp_path), output, provider, provenance("fake"), batch_size=1))
     artifacts = load_verified_artifacts(output)
 
     assert result.source_sections == 2
@@ -136,26 +123,14 @@ def test_tiny_build_batches_and_publishes_verified_artifacts(tmp_path: Path) -> 
     assert artifacts.manifest.embedding_model == "fake"
 
 
-def test_builder_rejects_provider_metadata_that_disagrees_with_profile(tmp_path: Path) -> None:
-    provider = TrackingProvider("openai-model", EmbeddingProviderKind.OPENAI)
-
-    with pytest.raises(IndexBuildError, match="provider metadata"):
+def test_builder_requires_explicit_provenance_descriptor(tmp_path: Path) -> None:
+    with pytest.raises(IndexBuildError, match="explicit immutable"):
         asyncio.run(
             build_index(
                 tmp_path / "missing-source",
-                tmp_path / "provider-mismatch",
-                provider,
-                provider_kind=EmbeddingProviderKind.OLLAMA,
-            )
-        )
-
-    with pytest.raises(IndexBuildError, match="model metadata"):
-        asyncio.run(
-            build_index(
-                tmp_path / "missing-source",
-                tmp_path / "model-mismatch",
-                provider,
-                model="other-model",
+                tmp_path / "missing-output",
+                TrackingProvider(),
+                object(),  # type: ignore[arg-type]
             )
         )
 
@@ -188,13 +163,11 @@ def test_cli_build_reads_runtime_environment(monkeypatch: pytest.MonkeyPatch, tm
         source_directory: Path,
         output_directory: Path,
         provider: object,
+        provenance: EmbeddingProvenance,
         **_: object,
     ) -> BuildResult:
-        assert (source_directory, output_directory, provider) == (
-            Path("source"),
-            tmp_path,
-            captured[0],
-        )
+        assert (source_directory, output_directory, provider) == (Path("source"), tmp_path, captured[0])
+        assert provenance == EmbeddingProvenance(EmbeddingProviderKind.OLLAMA, "configured-model")
         return expected_result
 
     def fake_provider_factory(config: RuntimeConfig) -> CapturingProvider:
@@ -224,9 +197,7 @@ def test_cli_build_reads_runtime_environment(monkeypatch: pytest.MonkeyPatch, tm
 
 def test_cli_parser_supports_defaults_and_overrides(tmp_path: Path) -> None:
     defaults = build_index_module._parser().parse_args([])  # pyright: ignore[reportPrivateUsage]
-    overrides = build_index_module._parser().parse_args(  # pyright: ignore[reportPrivateUsage]
-        ["--source", "custom-data", "--output", str(tmp_path)]
-    )
+    overrides = build_index_module._parser().parse_args(["--source", "custom-data", "--output", str(tmp_path)])  # pyright: ignore[reportPrivateUsage]
 
     assert defaults.source == Path("data")
     assert defaults.output == DEFAULT_ARTIFACT_DIRECTORY
@@ -277,11 +248,11 @@ def test_cli_failure_is_safe_and_returns_nonzero(
 def test_embedding_failure_preserves_existing_artifacts(tmp_path: Path) -> None:
     source = make_source(tmp_path)
     output = tmp_path / "db"
-    asyncio.run(build_index(source, output, TrackingProvider("first"), model="first"))
+    asyncio.run(build_index(source, output, TrackingProvider(), provenance("first")))
     before = artifact_bytes(output)
 
     with pytest.raises(IndexBuildError):
-        asyncio.run(build_index(source, output, FailingProvider("second"), model="second"))
+        asyncio.run(build_index(source, output, FailingProvider(), provenance("second")))
 
     assert artifact_bytes(output) == before
 
@@ -289,7 +260,7 @@ def test_embedding_failure_preserves_existing_artifacts(tmp_path: Path) -> None:
 def test_staging_failure_preserves_existing_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source = make_source(tmp_path)
     output = tmp_path / "db"
-    asyncio.run(build_index(source, output, TrackingProvider("first"), model="first"))
+    asyncio.run(build_index(source, output, TrackingProvider(), provenance("first")))
     before = artifact_bytes(output)
 
     def fail_staging(path: Path, index: object) -> None:
@@ -297,7 +268,7 @@ def test_staging_failure_preserves_existing_artifacts(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(build_index_module, "_write_faiss", fail_staging)
     with pytest.raises(IndexBuildError):
-        asyncio.run(build_index(source, output, TrackingProvider("second"), model="second"))
+        asyncio.run(build_index(source, output, TrackingProvider(), provenance("second")))
 
     assert artifact_bytes(output) == before
 
@@ -305,7 +276,7 @@ def test_staging_failure_preserves_existing_artifacts(monkeypatch: pytest.Monkey
 def test_mid_publication_failure_rolls_back_all_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source = make_source(tmp_path)
     output = tmp_path / "db"
-    asyncio.run(build_index(source, output, TrackingProvider("first"), model="first"))
+    asyncio.run(build_index(source, output, TrackingProvider(), provenance("first")))
     before = artifact_bytes(output)
     original_replace = os.replace
     replace_count = 0
@@ -319,7 +290,7 @@ def test_mid_publication_failure_rolls_back_all_artifacts(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(build_index_module.os, "replace", fail_mid_publication)
     with pytest.raises(IndexBuildError):
-        asyncio.run(build_index(source, output, TrackingProvider("second"), model="second"))
+        asyncio.run(build_index(source, output, TrackingProvider(), provenance("second")))
 
-    assert replace_count == 8  # Five publication attempts plus three rollback restores.
+    assert replace_count == 8
     assert artifact_bytes(output) == before

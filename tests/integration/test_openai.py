@@ -12,10 +12,12 @@ import pytest
 from numpy.typing import NDArray
 
 from test_automation_sdk_mcp.build_index import BuildResult, build_index
+from test_automation_sdk_mcp.compatibility import main as compatibility_main
 from test_automation_sdk_mcp.config import EmbeddingProviderKind, RuntimeConfig
 from test_automation_sdk_mcp.documents import EMBEDDING_DIMENSION
 from test_automation_sdk_mcp.errors import ConfigurationError
 from test_automation_sdk_mcp.index import load_packaged_artifacts, load_verified_artifacts
+from test_automation_sdk_mcp.provider import EmbeddingProvenance
 from test_automation_sdk_mcp.provider.openai import OpenAIEmbeddingProvider
 from test_automation_sdk_mcp.server import DocumentationRetriever, create_server
 
@@ -68,6 +70,13 @@ def local_openai() -> OpenAIIntegrationSettings:
     return OpenAIIntegrationSettings(config.endpoint_url, model, api_key)
 
 
+@pytest.fixture(scope="module")
+def local_ollama() -> None:
+    endpoint_url = os.environ.get("TA_SDK_OLLAMA_URL", "http://127.0.0.1:11434")
+    if not run(endpoint_is_reachable(endpoint_url)):
+        pytest.skip("Compatibility integration requires a reachable local Ollama endpoint.")
+
+
 def make_source(root: Path) -> Path:
     source = root / "source"
     source.mkdir()
@@ -118,6 +127,24 @@ def test_local_openai_returns_finite_768_dimensional_embeddings(
     assert np.isfinite(result).all()
 
 
+@pytest.mark.compatibility
+@pytest.mark.ollama
+@pytest.mark.openai
+def test_compatibility_command_reports_passing_pair(
+    local_openai: OpenAIIntegrationSettings,
+    local_ollama: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("TA_SDK_OPENAI_URL", local_openai.endpoint_url)
+    monkeypatch.setenv("TA_SDK_OPENAI_MODEL", local_openai.model)
+
+    assert compatibility_main(["--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["passed"] is True
+    assert report["sampled_row_ids"]
+
+
 @pytest.mark.openai
 def test_openai_builds_model_bound_and_trust_mode_artifacts_and_retrieves(
     local_openai: OpenAIIntegrationSettings,
@@ -134,8 +161,7 @@ def test_openai_builds_model_bound_and_trust_mode_artifacts_and_retrieves(
                 source,
                 model_bound_output,
                 model_provider,
-                model=local_openai.model,
-                provider_kind=EmbeddingProviderKind.OPENAI,
+                EmbeddingProvenance(EmbeddingProviderKind.OPENAI, local_openai.model),
             )
         finally:
             await model_provider.aclose()
@@ -146,8 +172,7 @@ def test_openai_builds_model_bound_and_trust_mode_artifacts_and_retrieves(
                 source,
                 trust_mode_output,
                 trust_provider,
-                model=None,
-                provider_kind=EmbeddingProviderKind.OPENAI,
+                EmbeddingProvenance(EmbeddingProviderKind.OPENAI, None),
             )
         finally:
             await trust_provider.aclose()
@@ -173,7 +198,7 @@ def test_openai_builds_model_bound_and_trust_mode_artifacts_and_retrieves(
 
 
 @pytest.mark.openai
-def test_openai_runtime_rejects_packaged_ollama_artifacts(
+def test_openai_runtime_accepts_packaged_ollama_artifacts(
     local_openai: OpenAIIntegrationSettings,
 ) -> None:
     config = RuntimeConfig(
@@ -182,5 +207,4 @@ def test_openai_runtime_rejects_packaged_ollama_artifacts(
         model=local_openai.model,
     )
 
-    with pytest.raises(ConfigurationError, match="provider"):
-        create_server(config, artifacts=load_packaged_artifacts())
+    create_server(config, artifacts=load_packaged_artifacts())

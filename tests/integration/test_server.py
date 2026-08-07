@@ -15,14 +15,10 @@ from numpy.typing import NDArray
 
 from test_automation_sdk_mcp.build_index import build_index
 from test_automation_sdk_mcp.config import EmbeddingProviderKind
-from test_automation_sdk_mcp.provider import EmbeddingProfile
+from test_automation_sdk_mcp.provider import EmbeddingProvenance
 
 
 class StaticEmbeddingProvider:
-    @property
-    def profile(self) -> EmbeddingProfile:
-        return EmbeddingProfile(EmbeddingProviderKind.OLLAMA, "fake-model")
-
     async def embed(self, inputs: Sequence[str]) -> NDArray[np.float32]:
         return np.zeros((len(inputs), 768), dtype=np.float32)
 
@@ -67,7 +63,14 @@ def test_installed_stdio_entry_point_supports_client_session_without_stdout_nois
         encoding="utf-8",
     )
     output = tmp_path / "db"
-    run(build_index(source, output, StaticEmbeddingProvider(), model="fake-model"))
+    run(
+        build_index(
+            source,
+            output,
+            StaticEmbeddingProvider(),
+            EmbeddingProvenance(EmbeddingProviderKind.OLLAMA, "fake-model"),
+        )
+    )
 
     environment = {key: value for key, value in os.environ.items() if not key.startswith("TA_SDK_")}
     environment.update(

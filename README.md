@@ -9,8 +9,9 @@ index at startup.
 
 - Python 3.12, 3.13, or 3.14.
 - An Ollama-compatible or OpenAI-compatible embedding endpoint.
-- The exact `nomic-embed-text:v1.5` Ollama model for the packaged index, unless
-	using a separately rebuilt matching artifact directory.
+- The packaged index was built with Ollama and
+	`nomic-embed-text:v1.5`. An OpenAI-compatible endpoint can query that same
+	index; embedding-space compatibility is an operator responsibility.
 - `uv` for development, index maintenance, and wheel verification.
 
 For a local Ollama installation, make sure the Ollama service is running and
@@ -106,7 +107,9 @@ attestations are needed when publisher authenticity must also be verified.
 ## MCP Client Configuration
 
 Configure an MCP client with the installed console script. The exact JSON
-location depends on the client. The stdio server entry has this shape:
+location depends on the client. Choose one of these provider configurations.
+
+For the default local Ollama provider:
 
 ```json
 {
@@ -123,10 +126,23 @@ location depends on the client. The stdio server entry has this shape:
 }
 ```
 
-On Windows, use the full path to
-`<venv>\Scripts\test-automation-sdk-mcp.exe` when the virtual environment is
-not active. The server writes protocol messages to stdout. Startup progress
-and errors go to stderr.
+For the verified local llama.cpp OpenAI-compatible endpoint:
+
+```json
+{
+	"mcpServers": {
+		"test-automation-sdk": {
+			"command": "test-automation-sdk-mcp",
+			"args": [],
+			"env": {
+				"TA_SDK_EMBEDDING_PROVIDER": "openai",
+				"TA_SDK_OPENAI_URL": "http://127.0.0.1:8080/v1/embeddings",
+				"TA_SDK_OPENAI_MODEL": "nomic-embed-text-v1.5.Q8_0.gguf"
+			}
+		}
+	}
+}
+```
 
 For a repository checkout, use the absolute path to `SDKMCP.cmd` on Windows or
 `SDKMCP.sh` on Linux/macOS as the MCP command instead. For a wheel installed
@@ -136,19 +152,19 @@ with `uv tool install`, use `test-automation-sdk-mcp` directly.
 
 All settings are read when the server or index builder starts:
 
-| Variable                    | Default                  | Description                                                  |
-| --------------------------- | ------------------------ | ------------------------------------------------------------ |
-| `TA_SDK_EMBEDDING_PROVIDER` | `ollama`                 | `ollama` or `openai`, case-insensitive.                      |
-| `TA_SDK_OLLAMA_URL`         | `http://127.0.0.1:11434` | Ollama-compatible base URL; the client appends `/api/embed`. |
-| `TA_SDK_OLLAMA_MODEL`       | `nomic-embed-text:v1.5`  | Required Ollama model; it must match the artifact manifest.  |
-| `TA_SDK_OLLAMA_API_KEY`     | unset                    | Optional Ollama bearer-token value.                          |
-| `TA_SDK_OPENAI_URL`         | unset                    | Required complete endpoint URL ending in `/v1/embeddings`.   |
-| `TA_SDK_OPENAI_MODEL`       | unset                    | Optional exact endpoint model identifier.                    |
-| `TA_SDK_OPENAI_API_KEY`     | unset                    | Optional OpenAI-compatible bearer-token value.               |
-| `TA_SDK_RESULT_COUNT`       | `5`                      | Number of nearest snippets, from 1 through 50.               |
-| `TA_SDK_DB_DIR`             | packaged `db/`           | Optional filesystem artifact-directory override.             |
-| `TA_SDK_CONNECT_TIMEOUT`    | `5`                      | HTTP connection timeout in seconds.                          |
-| `TA_SDK_REQUEST_TIMEOUT`    | `30`                     | HTTP request timeout in seconds.                             |
+| Variable                    | Default                  | Description                                                        |
+| --------------------------- | ------------------------ | ------------------------------------------------------------------ |
+| `TA_SDK_EMBEDDING_PROVIDER` | `ollama`                 | `ollama` or `openai`, case-insensitive.                            |
+| `TA_SDK_OLLAMA_URL`         | `http://127.0.0.1:11434` | Ollama-compatible base URL; the client appends `/api/embed`.       |
+| `TA_SDK_OLLAMA_MODEL`       | `nomic-embed-text:v1.5`  | Required Ollama request model; manifest value is build provenance. |
+| `TA_SDK_OLLAMA_API_KEY`     | unset                    | Optional Ollama bearer-token value.                                |
+| `TA_SDK_OPENAI_URL`         | unset                    | Required complete endpoint URL ending in `/v1/embeddings`.         |
+| `TA_SDK_OPENAI_MODEL`       | unset                    | Optional endpoint model identifier; not an artifact admission key. |
+| `TA_SDK_OPENAI_API_KEY`     | unset                    | Optional OpenAI-compatible bearer-token value.                     |
+| `TA_SDK_RESULT_COUNT`       | `5`                      | Number of nearest snippets, from 1 through 50.                     |
+| `TA_SDK_DB_DIR`             | packaged `db/`           | Optional filesystem artifact-directory override.                   |
+| `TA_SDK_CONNECT_TIMEOUT`    | `5`                      | HTTP connection timeout in seconds.                                |
+| `TA_SDK_REQUEST_TIMEOUT`    | `30`                     | HTTP request timeout in seconds.                                   |
 
 When `TA_SDK_OLLAMA_API_KEY` is set, requests contain
 `Authorization: Bearer <value>`. The key is never logged or included in error
@@ -157,6 +173,10 @@ client's environment or secret-management facility.
 
 The text supplied to `retrieve_documentation` and the documentation text sent
 while building an index are transmitted to the selected embedding endpoint.
+The provider and model recorded in the manifest describe how document vectors
+were built. Runtime does not reject a different provider or model; the operator
+owns the risk of incompatible pooling, normalization, task prefixes, model
+conversion, quantization, or backend settings.
 
 ### Local Ollama
 
@@ -181,8 +201,8 @@ when supplied, and return one finite 768-value vector for each input.
 
 ### Local OpenAI-Compatible Endpoint
 
-The OpenAI-compatible URL is the complete embeddings endpoint. The verified
-local contract uses the active model when `TA_SDK_OPENAI_MODEL` is omitted:
+The OpenAI-compatible URL is the complete embeddings endpoint. Set the model
+when the endpoint supports or requires explicit model selection:
 
 ```powershell
 $env:TA_SDK_EMBEDDING_PROVIDER = "openai"
@@ -191,8 +211,9 @@ $env:TA_SDK_OPENAI_MODEL = "nomic-embed-text-v1.5.Q8_0.gguf"
 test-automation-sdk-mcp
 ```
 
-The OpenAI model identifier is different from the packaged Ollama identifier.
-Build and select an OpenAI artifact directory before using this configuration.
+The packaged Ollama-built index is used automatically; these provider settings
+are all that is required. If the endpoint always serves one active model, omit
+`TA_SDK_OPENAI_MODEL` and the request will omit its `model` field.
 
 ### Authenticated Remote OpenAI-Compatible Endpoint
 
@@ -201,15 +222,64 @@ $env:TA_SDK_EMBEDDING_PROVIDER = "openai"
 $env:TA_SDK_OPENAI_URL = "https://embeddings.example.test/v1/embeddings"
 $env:TA_SDK_OPENAI_MODEL = "approved-embedding-model"
 $env:TA_SDK_OPENAI_API_KEY = "set-this-through-your-secret-store"
-$env:TA_SDK_DB_DIR = "C:\path\to\matching\openai-artifacts"
 test-automation-sdk-mcp
 ```
 
-If `TA_SDK_OPENAI_MODEL` is omitted, the runtime enters explicit trust mode:
-the model field is omitted from requests and the runtime does not compare a
-model name with the artifact. The operator is responsible for keeping the
-endpoint's active model unchanged. A configured exact model requires an
-artifact whose manifest records that same non-null model.
+If `TA_SDK_OPENAI_MODEL` is omitted, the model field is omitted from requests.
+If supplied, the provider may validate a returned response model against that
+request value, but neither form is compared with the packaged manifest.
+
+### Verified llama.cpp Reference
+
+This measured configuration used the packaged Ollama-built index:
+
+```powershell
+llama-server `
+	-m nomic-embed-text-v1.5.Q8_0.gguf `
+	--embedding `
+	--host 0.0.0.0 `
+	--port 8080 `
+	-c 8192 `
+	-b 8192 `
+	-ub 8192 `
+	--rope-scaling yarn `
+	--rope-freq-scale 0.75
+```
+
+On the committed 12-query and 128-document probe corpus, both endpoints
+returned finite 768-dimensional vectors. A reference run measured same-input
+cosine p5 `0.99654`, pairwise geometry correlation `0.99815`, query top-5
+overlap `0.98333`, and document top-10 neighborhood overlap `0.95781`. Values
+may vary slightly across backend versions; these results apply only to the
+tested model file and server settings.
+
+### Optional Compatibility Check
+
+Run the advisory comparison before trying a different model, quantization,
+conversion, pooling, normalization, task prefix, or backend configuration.
+Both Ollama and the candidate OpenAI-compatible endpoint must be running.
+
+From a repository checkout, this self-contained command uses the default local
+Ollama service and the verified llama.cpp endpoint:
+
+```powershell
+uv run test-automation-sdk-mcp-check-embedding-compatibility `
+	--openai-url http://127.0.0.1:8080/v1/embeddings `
+	--openai-model nomic-embed-text-v1.5.Q8_0.gguf
+```
+
+With a global wheel installation, omit `uv run`. The command also reads the
+normal `TA_SDK_OLLAMA_*` and `TA_SDK_OPENAI_*` variables; command-line URL and
+model options override them. Add `--json` for machine-readable output.
+
+Success requires finite 768-dimensional vectors, same-input cosine p5 at least
+`0.995`, pairwise geometry correlation at least `0.995`, mean query top-5
+overlap at least `0.95`, mean document top-10 overlap at least `0.95`, and
+representative result checks. The command returns a nonzero exit code when the
+advisory check fails. Runtime does not consume or enforce its report, and an
+endpoint may still be tried after a failed result. JSON output contains
+metrics, hashes, thresholds, and sampled row IDs, but no endpoints, keys,
+request text, vectors, responses, or paths.
 
 ## Maintainer Index Rebuild
 
@@ -227,8 +297,8 @@ The `data/` folder is ignored by Git and is only a local input to the index
 builder. Do not commit it.
 
 The committed index was built from the complete `data/` tree with the default
-Ollama provider and `nomic-embed-text:v1.5`. Rebuild it only when the source
-documentation, provider, or embedding model changes:
+Ollama provider and `nomic-embed-text:v1.5`. Rebuild it when the source
+documentation or document embedding configuration changes:
 
 ```powershell
 $env:TA_SDK_OLLAMA_URL = "http://127.0.0.1:11434"
@@ -242,12 +312,9 @@ The builder validates source coverage, chunks deterministically, embeds in
 batches, validates all vectors, reloads the staged artifacts, and publishes the
 three files together. The manifest records the model, 768 dimensions, L2
 metric, document count, and SHA-256 hashes. Review all three generated files.
-
-Provider changes require separate artifacts. For OpenAI-compatible builds,
-set `TA_SDK_EMBEDDING_PROVIDER=openai`, set `TA_SDK_OPENAI_URL`, optionally set
-`TA_SDK_OPENAI_MODEL`, and write to a separate output directory. Point
-`TA_SDK_DB_DIR` at that directory at runtime. Never reuse the packaged Ollama
-artifact merely because both providers return 768 dimensions.
+One packaged Ollama-built database is used by both providers. A separately
+rebuilt index records its build provider and model as provenance, but runtime
+admission does not require those values to match the query provider.
 
 ## Tests and Wheel Validation
 
@@ -257,6 +324,7 @@ Run the non-network checks first, then the marked tests with local Ollama:
 uv run ruff check src tests
 uv run pyright
 uv run pytest -m "not ollama and not openai and not release"
+uv run pytest -m compatibility
 uv run pytest -m ollama
 uv run pytest -m openai
 uv build
@@ -340,12 +408,14 @@ are reported on stderr and are not MCP tool errors.
 - Increase `TA_SDK_CONNECT_TIMEOUT` or `TA_SDK_REQUEST_TIMEOUT` for a remote
 	service, within the supported 300-second maximum.
 
-**Model mismatch**
+**Embedding compatibility**
 
-- `TA_SDK_OLLAMA_MODEL` must match `embedding_model` in
-	`TA_Docu.manifest.json`.
-- Pull the exact pinned model or rebuild the index with the model you intend
-	to operate. The server refuses to start on a mismatch.
+- The manifest provider and model are build provenance, not runtime admission
+	keys. A differing provider or model does not prevent startup.
+- Run the optional compatibility checker when changing quantization, model
+	conversion, pooling, normalization, task prefixes, or backend settings.
+- A failed advisory check does not block runtime, but it indicates retrieval
+	quality risk that the operator must accept or resolve.
 
 **Dimension or response errors**
 

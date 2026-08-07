@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from test_automation_sdk_mcp.compatibility import packaged_probe_corpus
 from test_automation_sdk_mcp.config import DEFAULT_MODEL
 from test_automation_sdk_mcp.index import load_packaged_artifacts
 
@@ -26,6 +27,9 @@ def test_packaged_artifacts_load_outside_repository_cwd(tmp_path: Path, monkeypa
     assert artifacts.manifest.document_count == len(artifacts.documents.documents)
     assert artifacts.index.ntotal == artifacts.manifest.document_count
     assert artifacts.paths.directory != Path.cwd()
+    with packaged_probe_corpus() as (_, corpus):
+        assert len(corpus.queries) == 12
+        assert len(corpus.document_row_ids) == 128
 
 
 @pytest.mark.release

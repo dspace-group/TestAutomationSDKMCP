@@ -16,8 +16,8 @@ DEFAULT_BATCH_SIZE = 32
 
 
 @dataclass(frozen=True, slots=True)
-class EmbeddingProfile:
-    """Immutable provider/model identity recorded in generated artifacts."""
+class EmbeddingProvenance:
+    """Immutable provider/model provenance recorded in generated artifacts."""
 
     provider: EmbeddingProviderKind
     model: str | None
@@ -26,7 +26,7 @@ class EmbeddingProfile:
         provider = EmbeddingProviderKind(self.provider)
         object.__setattr__(self, "provider", provider)
         if provider is EmbeddingProviderKind.OLLAMA and self.model is None:
-            raise ValueError("Ollama embedding profiles require a model.")
+            raise ValueError("Ollama embedding provenance requires a model.")
         if self.model is not None:
             object.__setattr__(self, "model", validate_model(self.model))
 
@@ -36,16 +36,6 @@ class EmbeddingProvider(Protocol):
 
     async def embed(self, inputs: Sequence[str]) -> NDArray[np.float32]:
         """Embed inputs in their original order."""
-
-        ...
-
-
-class EmbeddingProviderWithProfile(EmbeddingProvider, Protocol):
-    """Embedding provider contract required when building an index."""
-
-    @property
-    def profile(self) -> EmbeddingProfile:
-        """Return immutable provider/model provenance."""
 
         ...
 
@@ -111,9 +101,8 @@ def vectors_to_matrix(vectors: Sequence[Sequence[float | int]], input_count: int
 __all__ = [
     "DEFAULT_BATCH_SIZE",
     "EMBEDDING_DIMENSION",
-    "EmbeddingProfile",
+    "EmbeddingProvenance",
     "EmbeddingProvider",
-    "EmbeddingProviderWithProfile",
     "validate_batch_size",
     "validate_inputs",
     "validate_model",

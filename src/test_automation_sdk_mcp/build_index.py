@@ -24,7 +24,7 @@ from .chunking import (
     hash_html_tree,
     load_source_items,
 )
-from .config import DEFAULT_ARTIFACT_DIRECTORY, EmbeddingProviderKind, RuntimeConfig
+from .config import DEFAULT_ARTIFACT_DIRECTORY, RuntimeConfig
 from .documents import ChunkingManifest, DocumentRecord, DocumentStore, IndexManifest
 from .errors import EmbeddingError, IndexBuildError, TestAutomationSDKError
 from .index import (
@@ -33,7 +33,7 @@ from .index import (
     write_document_store,
     write_index_manifest,
 )
-from .provider import DEFAULT_BATCH_SIZE, EMBEDDING_DIMENSION, EmbeddingProfile, EmbeddingProviderWithProfile
+from .provider import DEFAULT_BATCH_SIZE, EMBEDDING_DIMENSION, EmbeddingProvenance, EmbeddingProvider
 from .provider.factory import create_embedding_provider
 
 
@@ -79,7 +79,7 @@ def _validated_vectors(
 
 
 async def _embed_chunks(
-    provider: EmbeddingProviderWithProfile,
+    provider: EmbeddingProvider,
     chunks: Sequence[DocumentChunk],
     index: object,
     *,
@@ -94,12 +94,6 @@ async def _embed_chunks(
         if not isinstance(index, faiss.IndexFlatL2):
             raise IndexBuildError("Index builder created an unexpected FAISS index type.")
         index.add(matrix)  # pyright: ignore[reportUnknownMemberType] - FAISS exposes an incomplete overload.
-
-
-def _validated_profile(value: object) -> EmbeddingProfile:
-    if not isinstance(value, EmbeddingProfile):
-        raise IndexBuildError("Index builder requires immutable embedding provider provenance.")
-    return value
 
 
 def _write_faiss(path: Path, index: object) -> None:
@@ -142,26 +136,18 @@ def _publish(staged: ArtifactPaths, destination: ArtifactPaths) -> None:
 async def build_index(
     source_directory: Path,
     output_directory: Path,
-    provider: EmbeddingProviderWithProfile,
+    provider: EmbeddingProvider,
+    provenance: EmbeddingProvenance,
     *,
-    model: str | None = None,
-    provider_kind: EmbeddingProviderKind | str | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
     max_characters: int = DEFAULT_MAX_CHARACTERS,
     overlap_characters: int = DEFAULT_OVERLAP_CHARACTERS,
 ) -> BuildResult:
     """Build a verified index and publish it as one artifact generation."""
 
-    provider_profile = _validated_profile(provider.profile)
-    if provider_kind is not None:
-        try:
-            selected_provider = EmbeddingProviderKind(provider_kind)
-        except (TypeError, ValueError) as error:
-            raise IndexBuildError("Index build selected an unknown embedding provider.") from error
-        if selected_provider is not provider_profile.provider:
-            raise IndexBuildError("Index build provider metadata does not match the embedding provider.")
-    if model is not None and model != provider_profile.model:
-        raise IndexBuildError("Index build model metadata does not match the embedding provider.")
+    if type(provenance) is not EmbeddingProvenance:
+        raise IndexBuildError("Index builder requires explicit immutable embedding provenance.")
+    build_provenance = provenance
 
     source = source_directory.resolve()
     output = output_directory.resolve()
@@ -194,8 +180,8 @@ async def build_index(
             schema_version=2,
             index_type="IndexFlatL2",
             distance_metric="l2",
-            embedding_provider=provider_profile.provider.value,
-            embedding_model=provider_profile.model,
+            embedding_provider=build_provenance.provider.value,
+            embedding_model=build_provenance.model,
             embedding_dimension=EMBEDDING_DIMENSION,
             document_count=len(chunks),
             search_json_sha256=search_json_sha256,
@@ -242,11 +228,13 @@ def _parser() -> argparse.ArgumentParser:
 async def _build_from_arguments(source: Path, output: Path) -> BuildResult:
     config = RuntimeConfig.from_environment()
     provider = create_embedding_provider(config)
+    provenance = EmbeddingProvenance(config.provider, config.model)
     try:
         return await build_index(
             source,
             output,
             provider,
+            provenance,
         )
     finally:
         close = getattr(provider, "aclose", None)

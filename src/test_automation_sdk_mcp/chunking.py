@@ -229,10 +229,14 @@ def _chunk_id(location: str, chunk_index: int, content: str) -> str:
     return hashlib.sha256(identity).hexdigest()
 
 
-def _embedding_text(item: SearchItem, content: str) -> str:
-    prefix_parts = [*item.breadcrumbs, item.title]
+def embedding_text(breadcrumbs: Sequence[str], title: str, content: str) -> str:
+    prefix_parts = [*breadcrumbs, title]
     prefix = " > ".join(part for part in prefix_parts if part)
     return f"{prefix}\n\n{content}" if prefix and content else prefix or content
+
+
+def _embedding_text(item: SearchItem, content: str) -> str:
+    return embedding_text(item.breadcrumbs, item.title, content)
 
 
 def chunk_items(
@@ -316,6 +320,7 @@ __all__ = [
     "DocumentChunk",
     "SearchItem",
     "chunk_items",
+    "embedding_text",
     "hash_file",
     "hash_html_tree",
     "hash_source_tree",

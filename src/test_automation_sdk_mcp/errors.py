@@ -116,5 +116,9 @@ class IndexBuildError(TestAutomationSDKError):
     """Raised when documentation ingestion or index publication fails."""
 
 
+class CompatibilityError(TestAutomationSDKError):
+    """Raised when the advisory embedding compatibility check cannot run."""
+
+
 class RetrievalError(TestAutomationSDKError):
     """Raised when a retrieval operation cannot produce a valid result."""

@@ -4,9 +4,10 @@ from pathlib import Path
 import pytest
 
 from test_automation_sdk_mcp.build_index import build_index
-from test_automation_sdk_mcp.config import DEFAULT_ENDPOINT_URL, DEFAULT_MODEL
+from test_automation_sdk_mcp.config import DEFAULT_ENDPOINT_URL, DEFAULT_MODEL, EmbeddingProviderKind
 from test_automation_sdk_mcp.index import load_verified_artifacts
 from test_automation_sdk_mcp.ollama import OllamaEmbeddingProvider
+from test_automation_sdk_mcp.provider import EmbeddingProvenance
 
 
 @pytest.mark.ollama
@@ -17,7 +18,12 @@ def test_full_documentation_index_builds_and_reloads(tmp_path: Path) -> None:
 
     async def exercise() -> tuple[int, int]:
         async with OllamaEmbeddingProvider(DEFAULT_ENDPOINT_URL, DEFAULT_MODEL) as provider:
-            result = await build_index(source, output, provider, model=DEFAULT_MODEL)
+            result = await build_index(
+                source,
+                output,
+                provider,
+                EmbeddingProvenance(EmbeddingProviderKind.OLLAMA, DEFAULT_MODEL),
+            )
         artifacts = load_verified_artifacts(output)
         assert result.source_sections == 846
         assert result.chunk_count == 972
