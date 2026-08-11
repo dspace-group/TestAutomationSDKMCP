@@ -22,6 +22,9 @@ class StaticEmbeddingProvider:
     async def embed(self, inputs: Sequence[str]) -> NDArray[np.float32]:
         return np.zeros((len(inputs), 768), dtype=np.float32)
 
+    async def aclose(self) -> None:
+        return None
+
 
 class EmbeddingHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:

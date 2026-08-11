@@ -39,6 +39,11 @@ class EmbeddingProvider(Protocol):
 
         ...
 
+    async def aclose(self) -> None:
+        """Release resources owned by the provider; resource-free providers may no-op."""
+
+        ...
+
 
 def validate_model(value: object) -> str:
     if not isinstance(value, str):

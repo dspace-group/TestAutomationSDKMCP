@@ -6,10 +6,9 @@ import os
 import shutil
 import sys
 import tempfile
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 import faiss
 import numpy as np
@@ -237,9 +236,7 @@ async def _build_from_arguments(source: Path, output: Path) -> BuildResult:
             provenance,
         )
     finally:
-        close = getattr(provider, "aclose", None)
-        if callable(close):
-            await cast(Callable[[], Awaitable[object]], close)()
+        await provider.aclose()
 
 
 def main(arguments: Sequence[str] | None = None) -> int:

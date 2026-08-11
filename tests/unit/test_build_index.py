@@ -25,6 +25,9 @@ class TrackingProvider:
         self.calls.append(tuple(inputs))
         return np.ones((len(inputs), 768), dtype=np.float32)
 
+    async def aclose(self) -> None:
+        return None
+
 
 class CapturingProvider:
     instances: ClassVar[list["CapturingProvider"]] = []
@@ -39,6 +42,7 @@ class CapturingProvider:
         request_timeout: float,
     ) -> None:
         self.arguments = (endpoint_url, model, api_key, connect_timeout, request_timeout)
+        self.close_calls = 0
         self.__class__.instances.append(self)
 
     async def __aenter__(self) -> Self:
@@ -47,10 +51,16 @@ class CapturingProvider:
     async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
         return None
 
+    async def aclose(self) -> None:
+        self.close_calls += 1
+
 
 class FailingProvider:
     async def embed(self, inputs: Sequence[str]) -> np.ndarray:
         raise RuntimeError("simulated embedding failure")
+
+    async def aclose(self) -> None:
+        return None
 
 
 def make_source(root: Path) -> Path:
@@ -193,6 +203,7 @@ def test_cli_build_reads_runtime_environment(monkeypatch: pytest.MonkeyPatch, tm
         7.5,
         42.0,
     )
+    assert captured[0].close_calls == 1
 
 
 def test_cli_parser_supports_defaults_and_overrides(tmp_path: Path) -> None:
