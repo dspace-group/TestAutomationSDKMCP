@@ -30,7 +30,7 @@ source-include = ["src/test_automation_sdk_mcp/db/**"]
 [dependency-groups]
 dev = [
     "pyinstaller>=6.21.0",
-    "pyright>=1.1.390",
+    "pyright>=1.1.411",
     "pytest>=9.1.1",
     "ruff>=0.16.2",
 ]
