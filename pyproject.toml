@@ -1,0 +1,50 @@
+[project]
+name = "test-automation-sdk-mcp"
+version = "0.1.0"
+description = "MCP Server for Test Automation SDK - Provides RAG-based documentation"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "faiss-cpu==1.15.0",
+    "httpx>=0.28.0",
+    "markdownify>=0.14.0",
+    "mcp[cli]>=2.0.0",
+    "numpy>=2.0.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+test-automation-sdk-mcp = "test_automation_sdk_mcp:main"
+test-automation-sdk-mcp-build-index = "test_automation_sdk_mcp.build_index:main"
+test-automation-sdk-mcp-check-embedding-compatibility = "test_automation_sdk_mcp.compatibility:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+source-include = ["src/test_automation_sdk_mcp/db/**"]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.21.0",
+    "pyright>=1.1.390",
+    "pytest>=9.1.1",
+    "ruff>=0.16.1",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.pyright]
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+markers = [
+    "compatibility: advisory checks that require both configured embedding endpoints",
+    "ollama: tests that require a running Ollama embedding endpoint",
+    "openai: tests that require a running OpenAI-compatible embedding endpoint",
+    "release: tests that build and validate a release installation",
+]
