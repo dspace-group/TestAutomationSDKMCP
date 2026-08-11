@@ -29,6 +29,9 @@ class StaticProvider:
         assert len(inputs) == len(self.vectors)
         return self.vectors
 
+    async def aclose(self) -> None:
+        return None
+
 
 def _artifacts(tmp_path: Path, vectors: NDArray[np.float32]) -> LoadedArtifacts:
     index = faiss.IndexFlatL2(768)

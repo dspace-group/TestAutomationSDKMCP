@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from importlib.metadata import version
 from math import isfinite
 from pathlib import Path
-from typing import Annotated, Protocol, cast, runtime_checkable
+from typing import Annotated, cast
 
 import numpy as np
 from mcp.server import MCPServer
@@ -96,12 +96,6 @@ class RetrievalResult:
 @dataclass(frozen=True, slots=True)
 class _ServerRuntime:
     retriever: "DocumentationRetriever"
-
-
-@runtime_checkable
-class _ClosableEmbeddingProvider(Protocol):
-    async def aclose(self) -> None:
-        """Close resources owned by the provider."""
 
 
 EmbeddingProviderFactory = Callable[[RuntimeConfig], EmbeddingProvider]
@@ -267,8 +261,7 @@ def _default_provider_factory(config: RuntimeConfig) -> EmbeddingProvider:
 
 
 async def _close_provider(provider: EmbeddingProvider) -> None:
-    if isinstance(provider, _ClosableEmbeddingProvider):
-        await provider.aclose()
+    await provider.aclose()
 
 
 def _snippet(result: RetrievalResult) -> DocumentationSnippet:

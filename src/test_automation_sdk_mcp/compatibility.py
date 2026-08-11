@@ -5,7 +5,7 @@ import asyncio
 import json
 import os
 import sys
-from collections.abc import Awaitable, Callable, Generator, Sequence
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -472,9 +472,7 @@ async def _check_from_arguments(args: argparse.Namespace) -> dict[str, object]:
                 )
     finally:
         for provider in (baseline_provider, candidate_provider):
-            close = getattr(provider, "aclose", None)
-            if callable(close):
-                await cast(Callable[[], Awaitable[None]], close)()
+            await provider.aclose()
 
 
 def _parser() -> argparse.ArgumentParser:

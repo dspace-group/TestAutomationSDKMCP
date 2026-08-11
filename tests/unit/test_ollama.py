@@ -234,6 +234,7 @@ def test_client_is_closed_after_success_and_failure() -> None:
     )
     run(success_provider.embed(["one"]))
     run(success_provider.aclose())
+    run(success_provider.aclose())
     assert success_transport.closed
 
     failure_transport = TrackingTransport(response_handler({"embeddings": []}))

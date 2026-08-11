@@ -42,15 +42,15 @@ flowchart LR
 
 ### Runtime responsibilities
 
-| Boundary                       | Responsibility                                                                                                             |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| MCP client host                | Starts the console entry point and forwards MCP requests from the agent.                                                   |
-| `test_automation_sdk_mcp.main` | Creates the server, configures stderr logging, and runs MCP over stdio.                                                    |
-| `create_server`                | Loads verified artifacts, registers the tool, and owns the provider lifecycle.                                             |
-| `DocumentationRetriever`       | Validates a query, requests its embedding, searches FAISS, validates rows and distances, and maps rows to documents.       |
-| `provider/`                    | Selects Ollama or OpenAI-compatible transport, validates wire boundaries, and translates failures into application errors. |
-| FAISS `IndexFlatL2`            | Stores the document embeddings and returns nearest row IDs with L2 distances.                                              |
-| `DocumentStore`                | Stores the ordered metadata and content records that correspond to FAISS row IDs.                                          |
+| Boundary                       | Responsibility                                                                                                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MCP client host                | Starts the console entry point and forwards MCP requests from the agent.                                                                                                  |
+| `test_automation_sdk_mcp.main` | Creates the server, configures stderr logging, and runs MCP over stdio.                                                                                                   |
+| `create_server`                | Loads verified artifacts, registers the tool, and owns the provider lifecycle.                                                                                            |
+| `DocumentationRetriever`       | Validates a query, requests its embedding, searches FAISS, validates rows and distances, and maps rows to documents without owning provider lifetime.                     |
+| `provider/`                    | Selects Ollama or OpenAI-compatible transport, exposes `embed()` and asynchronous `aclose()`, validates wire boundaries, and translates failures into application errors. |
+| FAISS `IndexFlatL2`            | Stores the document embeddings and returns nearest row IDs with L2 distances.                                                                                             |
+| `DocumentStore`                | Stores the ordered metadata and content records that correspond to FAISS row IDs.                                                                                         |
 
 ## Package Structure
 
@@ -199,6 +199,12 @@ sequenceDiagram
 The default artifact directory is the package's `db/` resource directory. A
 filesystem directory can be selected with `TA_SDK_DB_DIR`. The runtime never
 uses the current working directory to discover packaged artifacts.
+
+Provider lifecycle is managed at composition roots. The server lifespan, index
+builder entry point, and compatibility checker close the providers they create
+or receive in their cleanup paths. `DocumentationRetriever` only consumes a
+provider and never closes it. Providers without owned resources still satisfy
+the shared contract with a no-op asynchronous `aclose()` implementation.
 
 ## Retrieval and Agent Tool Invocation
 
