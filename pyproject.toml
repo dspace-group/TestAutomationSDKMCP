@@ -8,10 +8,10 @@ license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.15"
 dependencies = [
     "faiss-cpu==1.15.0",
-    "httpx>=0.28.0",
+    "httpx>=0.28.1",
     "markdownify>=0.14.0",
     "mcp[cli]>=2.0.0",
-    "numpy>=2.0.0",
+    "numpy>=2.5.1",
     "pydantic>=2.13.4",
 ]
 
@@ -21,7 +21,7 @@ test-automation-sdk-mcp-build-index = "test_automation_sdk_mcp.build_index:main"
 test-automation-sdk-mcp-check-embedding-compatibility = "test_automation_sdk_mcp.compatibility:main"
 
 [build-system]
-requires = ["uv_build>=0.12.1,<0.13.0"]
+requires = ["uv_build>=0.12.3,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
