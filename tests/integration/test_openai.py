@@ -127,10 +127,28 @@ def test_local_openai_returns_finite_768_dimensional_embeddings(
     assert np.isfinite(result).all()
 
 
+@pytest.mark.openai
+def test_index_compatibility_command_reports_passing_candidate(
+    local_openai: OpenAIIntegrationSettings,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("TA_SDK_EMBEDDING_PROVIDER", "openai")
+    monkeypatch.setenv("TA_SDK_OPENAI_URL", local_openai.endpoint_url)
+    monkeypatch.setenv("TA_SDK_OPENAI_MODEL", local_openai.model)
+
+    assert compatibility_main(["--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["mode"] == "index"
+    assert report["reference"] == "verified_index"
+    assert report["passed"] is True
+    assert report["sampled_row_ids"]
+
+
 @pytest.mark.compatibility
 @pytest.mark.ollama
 @pytest.mark.openai
-def test_compatibility_command_reports_passing_pair(
+def test_live_parity_command_reports_passing_pair(
     local_openai: OpenAIIntegrationSettings,
     local_ollama: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -139,8 +157,10 @@ def test_compatibility_command_reports_passing_pair(
     monkeypatch.setenv("TA_SDK_OPENAI_URL", local_openai.endpoint_url)
     monkeypatch.setenv("TA_SDK_OPENAI_MODEL", local_openai.model)
 
-    assert compatibility_main(["--json"]) == 0
+    assert compatibility_main(["--mode", "parity", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
+    assert report["mode"] == "parity"
+    assert report["reference"] == "live_provider"
     assert report["passed"] is True
     assert report["sampled_row_ids"]
 

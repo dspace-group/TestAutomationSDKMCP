@@ -1,9 +1,7 @@
-# dSPACE TestAutomationSDK MCP Server
+# dSPACE Test Automation SDK MCP Server
 
-This package provides one read-only MCP tool, `retrieve_documentation`, backed
-by a committed FAISS index of the TestAutomationSDK documentation. The server
-communicates over MCP stdio. It does not crawl documentation or rebuild the
-index at startup.
+This Server provides the `retrieve_documentation` tool for the Test Automation SDK,
+backed by a committed FAISS index of the Test Automation SDK documentation.
 
 ## Prerequisites
 
@@ -18,8 +16,7 @@ pull the pinned model:
 ollama pull nomic-embed-text:v1.5
 ```
 
-The server uses Ollama's `/api/embed` endpoint. `ollama pull` installs the
-model. The MCP server connects to the configured service directly.
+The MCP server uses Ollama's `/api/embed` endpoin and connects directly to the configured service.
 
 The packaged index was built with Ollama and `nomic-embed-text:v1.5`. An OpenAI-compatible endpoint can query that same index, but compatibility is an
 operator responsibility ([Optional Compatibility Check](#optional-compatibility-check)).
@@ -253,33 +250,49 @@ overlap `0.98333`, and document top-10 neighborhood overlap `0.95781`. Values
 may vary slightly across backend versions; these results apply only to the
 tested model file and server settings.
 
-### Optional Compatibility Check
+### Optional Compatibility Checks
 
-Run the advisory comparison before trying a different model, quantization,
-conversion, pooling, normalization, task prefix, or backend configuration.
-Both Ollama and the candidate OpenAI-compatible endpoint must be running.
+The compatibility command is advisory and has two explicit modes. The default
+`index` mode evaluates one configured candidate endpoint against the exact
+verified documentation index. It does not start or contact an Ollama baseline;
+the stored document vectors are the reference, and deterministic query probes
+check representative documentation locations.
 
-From a repository checkout, this self-contained command uses the default local
-Ollama service and the verified llama.cpp endpoint:
+For an OpenAI-compatible candidate, select the provider as usual and run:
+
+```sh
+$env:TA_SDK_EMBEDDING_PROVIDER = "openai"
+$env:TA_SDK_OPENAI_URL = "http://127.0.0.1:8080/v1/embeddings"
+$env:TA_SDK_OPENAI_MODEL = "nomic-embed-text-v1.5.Q8_0.gguf"
+uv run test-automation-sdk-mcp-check-embedding-compatibility --json
+```
+
+The command also reads the normal `TA_SDK_OLLAMA_*` and `TA_SDK_OPENAI_*`
+variables. Provider-specific URL and model options override those values for
+the selected role. Index mode reports structural checks, candidate-versus-index
+document metrics, representative results, artifact hashes, thresholds, and
+sampled row IDs.
+
+Use live `parity` mode when the question is whether two active providers return
+similar vectors for the same probe inputs. This mode requires both providers;
+the example below compares the default local Ollama baseline with the verified
+OpenAI-compatible endpoint:
 
 ```sh
 uv run test-automation-sdk-mcp-check-embedding-compatibility `
+	--mode parity `
 	--openai-url http://127.0.0.1:8080/v1/embeddings `
-	--openai-model nomic-embed-text-v1.5.Q8_0.gguf
+	--openai-model nomic-embed-text-v1.5.Q8_0.gguf `
+	--json
 ```
 
-With a global wheel installation, omit `uv run`. The command also reads the
-normal `TA_SDK_OLLAMA_*` and `TA_SDK_OPENAI_*` variables; command-line URL and
-model options override them. Add `--json` for machine-readable output.
-
-Success requires finite 768-dimensional vectors, same-input cosine p5 at least
-`0.995`, pairwise geometry correlation at least `0.995`, mean query top-5
-overlap at least `0.95`, mean document top-10 overlap at least `0.95`, and
-representative result checks. The command returns a nonzero exit code when the
-advisory check fails. Runtime does not consume or enforce its report, and an
-endpoint may still be tried after a failed result. JSON output contains
-metrics, hashes, thresholds, and sampled row IDs, but no endpoints, keys,
-request text, vectors, responses, or paths.
+Parity mode retains same-input cosine, pairwise geometry, query-neighbor
+overlap, document-neighborhood overlap, and representative result checks.
+Both modes return a nonzero exit code when their applicable advisory checks
+fail. Runtime does not consume or enforce either report, and an endpoint may
+still be tried after a failed result. JSON output identifies the mode and
+contains only safe metrics, hashes, thresholds, and sampled row IDs; it never
+contains endpoints, keys, request text, vectors, responses, or local paths.
 
 ## Maintainer Index Rebuild
 

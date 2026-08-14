@@ -49,6 +49,7 @@ flowchart LR
 | `create_server`                | Loads verified artifacts, registers the tool, and owns the provider lifecycle.                                                                                            |
 | `DocumentationRetriever`       | Validates a query, requests its embedding, searches FAISS, validates rows and distances, and maps rows to documents without owning provider lifetime.                     |
 | `provider/`                    | Selects Ollama or OpenAI-compatible transport, exposes `embed()` and asynchronous `aclose()`, validates wire boundaries, and translates failures into application errors. |
+| `compatibility.py`             | Runs the advisory candidate-versus-index check by default or an explicit live provider parity comparison, then closes providers it owns.                                  |
 | FAISS `IndexFlatL2`            | Stores the document embeddings and returns nearest row IDs with L2 distances.                                                                                             |
 | `DocumentStore`                | Stores the ordered metadata and content records that correspond to FAISS row IDs.                                                                                         |
 
@@ -94,6 +95,47 @@ The build and runtime paths share the embedding dimension and provider contract,
 but they have different jobs. The builder creates artifacts; the runtime only
 loads, validates, and queries them. Provider/model values in the manifest are
 build provenance and do not serve as runtime admission keys.
+
+## Compatibility Evaluation
+
+The compatibility console command has two distinct advisory paths. Index mode
+is the default and needs only the configured candidate endpoint. It compares
+candidate embeddings for deterministic document samples with the stored vectors
+from the verified artifact generation, searches that same index with candidate
+query probes, and checks representative documentation locations.
+
+Parity mode is opt-in and needs two active providers. It embeds the same mixed
+query and document probe corpus through a baseline and candidate provider, then
+reports same-input and geometry similarity alongside retrieval overlap. It is a
+diagnostic comparison between live providers, not a runtime admission check.
+
+```mermaid
+flowchart LR
+	corpus[Deterministic probe corpus]
+	artifacts[(Verified artifact generation)]
+	candidate[Selected candidate provider]
+	baseline[Optional live baseline provider]
+	index_mode[Default index mode]
+	parity_mode[Opt-in parity mode]
+	index_report[Index compatibility report]
+	parity_report[Live parity report]
+
+	corpus --> index_mode
+	corpus --> parity_mode
+	artifacts --> index_mode
+	artifacts --> parity_mode
+	candidate --> index_mode
+	candidate --> parity_mode
+	baseline --> parity_mode
+	index_mode --> index_report
+	parity_mode --> parity_report
+```
+
+Index mode uses the verified generation itself as the document-space reference;
+it does not publish a duplicate reference sidecar or require an Ollama service.
+Parity mode retains the stronger same-input query comparison for cases where a
+live provider-to-provider measurement is useful. Neither mode writes approval
+state, changes runtime configuration, or changes the published artifacts.
 
 ## Building the Index
 
@@ -168,8 +210,10 @@ At runtime, `load_verified_artifacts` rejects missing files, invalid JSON or
 schemas, hash mismatches, mixed generations, wrong FAISS dimensions, wrong
 metrics, and count mismatches. The configured provider and model may differ
 from the manifest because those manifest fields describe build provenance.
-Embedding-space compatibility is an operator decision; the optional
-compatibility checker provides advisory evidence without changing startup.
+Embedding-space compatibility is an operator decision. The default
+compatibility check compares the candidate with this verified generation;
+optional parity mode compares two live providers. Neither path changes startup
+or runtime admission.
 
 ## Server Startup and Lifespan
 

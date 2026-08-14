@@ -27,7 +27,8 @@ from .provider import EmbeddingProvider
 from .provider.factory import create_embedding_provider
 
 PROBE_CORPUS_FILENAME = "embedding_compatibility_probe.json"
-COMPATIBILITY_SCHEMA_VERSION = 1
+PROBE_CORPUS_SCHEMA_VERSION = 1
+COMPATIBILITY_SCHEMA_VERSION = 2
 DEFAULT_DOCUMENT_SAMPLE_SIZE = 128
 DEFAULT_TOP_K = 10
 THRESHOLDS: dict[str, float] = {
@@ -36,6 +37,12 @@ THRESHOLDS: dict[str, float] = {
     "mean_top5_query_neighbor_overlap": 0.95,
     "mean_top10_document_neighborhood_overlap": 0.95,
 }
+INDEX_THRESHOLDS: dict[str, float] = {
+    "same_input_cosine_p5": THRESHOLDS["same_input_cosine_p5"],
+    "pairwise_cosine_correlation": THRESHOLDS["pairwise_cosine_correlation"],
+    "mean_top10_document_neighborhood_overlap": THRESHOLDS["mean_top10_document_neighborhood_overlap"],
+}
+ComparisonMode = Literal["index", "parity"]
 
 
 class CompatibilityProbe(BaseModel):
@@ -67,7 +74,7 @@ class ProbeCorpus(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal[1] = COMPATIBILITY_SCHEMA_VERSION
+    schema_version: Literal[1] = PROBE_CORPUS_SCHEMA_VERSION
     queries: tuple[CompatibilityProbe, ...]
     document_row_ids: tuple[int, ...]
 
@@ -229,6 +236,10 @@ class _SearchIndex(Protocol):
     def search(self, query: NDArray[np.float32], top_k: int) -> tuple[NDArray[np.float32], NDArray[np.int64]]: ...
 
 
+class _ReferenceIndex(_SearchIndex, Protocol):
+    def reconstruct(self, key: int) -> NDArray[np.float32]: ...
+
+
 def _nearest_rows(index: _SearchIndex, values: NDArray[np.float64], top_k: int) -> tuple[tuple[int, ...], ...]:
     query = np.ascontiguousarray(values, dtype=np.float32)
     try:
@@ -242,6 +253,20 @@ def _nearest_rows(index: _SearchIndex, values: NDArray[np.float64], top_k: int) 
     if not np.isfinite(distances).all() or not np.issubdtype(ids.dtype, np.integer):
         raise _invalid("Packaged FAISS index returned invalid compatibility results.")
     return tuple(tuple(int(row_id) for row_id in row) for row in ids)
+
+
+def _reference_vectors(artifacts: LoadedArtifacts, row_ids: Sequence[int]) -> NDArray[np.float32]:
+    if any(row_id >= len(artifacts.documents.documents) for row_id in row_ids):
+        raise _invalid("Compatibility probe corpus references a missing documentation row.")
+    try:
+        index = cast(_ReferenceIndex, artifacts.index)
+        raw = np.asarray([index.reconstruct(int(row_id)) for row_id in row_ids])
+    except (AttributeError, OverflowError, RuntimeError, TypeError, ValueError) as error:
+        raise _invalid("Verified index cannot provide compatibility reference vectors.") from error
+    inspection = _inspect_vectors(raw, len(row_ids))
+    if not inspection.structural_passed:
+        raise _invalid("Verified index returned invalid compatibility reference vectors.")
+    return np.ascontiguousarray(raw, dtype=np.float32)
 
 
 def _mean_overlap(left: Sequence[Sequence[int]], right: Sequence[Sequence[int]], top_k: int) -> float:
@@ -268,9 +293,12 @@ def _neighborhood_overlap(baseline: Sequence[set[int]], candidate: Sequence[set[
     return float(np.mean([len(left & right) / top_k for left, right in zip(baseline, candidate, strict=True)]))
 
 
-def _metric_checks(metrics: dict[str, float | int | None | bool]) -> dict[str, bool]:
+def _metric_checks(
+    metrics: dict[str, float | int | None | bool],
+    thresholds: dict[str, float] = THRESHOLDS,
+) -> dict[str, bool]:
     checks: dict[str, bool] = {}
-    for name, threshold in THRESHOLDS.items():
+    for name, threshold in thresholds.items():
         value = metrics.get(name)
         checks[name] = isinstance(value, (int, float)) and not isinstance(value, bool) and value >= threshold
     return checks
@@ -305,11 +333,148 @@ def _comparison_values(
     )
 
 
+def _document_texts(artifacts: LoadedArtifacts, row_ids: Sequence[int]) -> list[str]:
+    if any(row_id >= len(artifacts.documents.documents) for row_id in row_ids):
+        raise _invalid("Compatibility probe corpus references a missing documentation row.")
+    return [
+        embedding_text(
+            artifacts.documents.documents[row_id].breadcrumbs,
+            artifacts.documents.documents[row_id].title,
+            artifacts.documents.documents[row_id].content,
+        )
+        for row_id in row_ids
+    ]
+
+
+def _self_retrieval_metrics(
+    index: _SearchIndex,
+    values: NDArray[np.float64],
+    row_ids: Sequence[int],
+) -> tuple[float, float]:
+    neighbors = _nearest_rows(index, values, DEFAULT_TOP_K)
+    reciprocal_ranks: list[float] = []
+    top1_matches = 0
+    for expected_row_id, result_rows in zip(row_ids, neighbors, strict=True):
+        if result_rows and result_rows[0] == expected_row_id:
+            top1_matches += 1
+        try:
+            reciprocal_ranks.append(1.0 / (result_rows.index(expected_row_id) + 1))
+        except ValueError:
+            reciprocal_ranks.append(0.0)
+    return top1_matches / len(row_ids), float(np.mean(reciprocal_ranks))
+
+
+def _representative_results(
+    artifacts: LoadedArtifacts,
+    corpus: ProbeCorpus,
+    query_neighbors: Sequence[Sequence[int]],
+) -> tuple[dict[str, list[str]], bool]:
+    representative_results: dict[str, list[str]] = {}
+    for probe, neighbors in zip(corpus.queries, query_neighbors, strict=True):
+        representative_results[probe.id] = [artifacts.documents.documents[row_id].location for row_id in neighbors]
+    representative_probes = [probe for probe in corpus.queries if probe.expected_locations]
+    representative_passed = all(
+        any(
+            any(location.startswith(prefix) for prefix in probe.expected_locations)
+            for location in representative_results[probe.id]
+        )
+        for probe in representative_probes
+    )
+    return representative_results, representative_passed
+
+
 def _artifact_hashes(artifacts: LoadedArtifacts) -> dict[str, str]:
     return {
         "manifest_sha256": sha256(artifacts.paths.manifest.read_bytes()).hexdigest(),
         "faiss_sha256": artifacts.manifest.faiss_sha256,
         "documents_sha256": artifacts.manifest.documents_sha256,
+    }
+
+
+async def run_index_compatibility_check(
+    candidate_provider: EmbeddingProvider,
+    artifacts: LoadedArtifacts,
+    corpus: ProbeCorpus,
+    *,
+    corpus_sha256: str = "",
+    artifact_hashes: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Compare one provider with the verified index generation."""
+
+    query_texts = [probe.text for probe in corpus.queries]
+    document_texts = _document_texts(artifacts, corpus.document_row_ids)
+    inputs = query_texts + document_texts
+    candidate_raw = await candidate_provider.embed(inputs)
+    candidate = _inspect_vectors(candidate_raw, len(inputs))
+    reference = _inspect_vectors(
+        _reference_vectors(artifacts, corpus.document_row_ids),
+        len(document_texts),
+    )
+    query_count = len(query_texts)
+    metrics: dict[str, float | int | None | bool] = {
+        "same_input_cosine_min": None,
+        "same_input_cosine_mean": None,
+        "same_input_cosine_p5": None,
+        "pairwise_cosine_correlation": None,
+        "mean_top10_document_neighborhood_overlap": None,
+        "candidate_self_retrieval_top1_rate": None,
+        "candidate_self_retrieval_mrr10": None,
+    }
+    representative_results: dict[str, list[str]] = {}
+    representative_passed = False
+    metric_checks: dict[str, bool] = {name: False for name in INDEX_THRESHOLDS}
+    if (
+        candidate.values is not None
+        and reference.values is not None
+        and candidate.structural_passed
+        and reference.structural_passed
+    ):
+        candidate_queries = candidate.values[:query_count]
+        candidate_documents = candidate.values[query_count:]
+        same_input = _cosine_values(reference.values, candidate_documents)
+        metrics["same_input_cosine_min"] = float(np.min(same_input))
+        metrics["same_input_cosine_mean"] = float(np.mean(same_input))
+        metrics["same_input_cosine_p5"] = float(np.percentile(same_input, 5))
+        empty_queries = np.empty((0, EMBEDDING_DIMENSION), dtype=np.float64)
+        metrics["pairwise_cosine_correlation"] = _pairwise_correlation(
+            _ComparisonValues(empty_queries, empty_queries, reference.values, candidate_documents)
+        )
+        reference_document_neighbors = _document_neighborhoods(reference.values, corpus.document_row_ids, DEFAULT_TOP_K)
+        candidate_document_neighbors = _document_neighborhoods(
+            candidate_documents, corpus.document_row_ids, DEFAULT_TOP_K
+        )
+        metrics["mean_top10_document_neighborhood_overlap"] = _neighborhood_overlap(
+            reference_document_neighbors, candidate_document_neighbors, DEFAULT_TOP_K
+        )
+        search_index = cast(_SearchIndex, artifacts.index)
+        top1_rate, mrr10 = _self_retrieval_metrics(search_index, candidate_documents, corpus.document_row_ids)
+        metrics["candidate_self_retrieval_top1_rate"] = top1_rate
+        metrics["candidate_self_retrieval_mrr10"] = mrr10
+        query_neighbors = _nearest_rows(search_index, candidate_queries, 5)
+        representative_results, representative_passed = _representative_results(artifacts, corpus, query_neighbors)
+        metric_checks = _metric_checks(metrics, INDEX_THRESHOLDS)
+
+    structural_passed = reference.structural_passed and candidate.structural_passed
+    passed = structural_passed and all(metric_checks.values()) and representative_passed
+    return {
+        "schema_version": COMPATIBILITY_SCHEMA_VERSION,
+        "mode": "index",
+        "reference": "verified_index",
+        "package_version": version("test-automation-sdk-mcp"),
+        "artifact_hashes": _artifact_hashes(artifacts) if artifact_hashes is None else artifact_hashes,
+        "corpus_sha256": corpus_sha256,
+        "sampled_row_ids": list(corpus.document_row_ids),
+        "thresholds": INDEX_THRESHOLDS,
+        "vector_quality": {
+            "reference": _vector_quality(reference),
+            "candidate": _vector_quality(candidate),
+        },
+        "metrics": metrics,
+        "metric_checks": metric_checks,
+        "representative_results": representative_results,
+        "representative_passed": representative_passed,
+        "structural_passed": structural_passed,
+        "passed": passed,
     }
 
 
@@ -324,17 +489,8 @@ async def run_compatibility_check(
 ) -> dict[str, object]:
     """Compare two providers and return a safe, deterministic advisory report."""
 
-    if any(row_id >= len(artifacts.documents.documents) for row_id in corpus.document_row_ids):
-        raise _invalid("Compatibility probe corpus references a missing documentation row.")
     query_texts = [probe.text for probe in corpus.queries]
-    document_texts = [
-        embedding_text(
-            artifacts.documents.documents[row_id].breadcrumbs,
-            artifacts.documents.documents[row_id].title,
-            artifacts.documents.documents[row_id].content,
-        )
-        for row_id in corpus.document_row_ids
-    ]
+    document_texts = _document_texts(artifacts, corpus.document_row_ids)
     inputs = query_texts + document_texts
     baseline_raw = await baseline_provider.embed(inputs)
     candidate_raw = await candidate_provider.embed(inputs)
@@ -379,28 +535,11 @@ async def run_compatibility_check(
         metrics["mean_top10_document_neighborhood_overlap"] = _neighborhood_overlap(
             baseline_document_neighbors, candidate_document_neighbors, DEFAULT_TOP_K
         )
-        candidate_self_neighbors = _nearest_rows(search_index, values.candidate_documents, DEFAULT_TOP_K)
-        reciprocal_ranks: list[float] = []
-        top1_matches = 0
-        for expected_row_id, neighbors in zip(corpus.document_row_ids, candidate_self_neighbors, strict=True):
-            if neighbors and neighbors[0] == expected_row_id:
-                top1_matches += 1
-            try:
-                reciprocal_ranks.append(1.0 / (neighbors.index(expected_row_id) + 1))
-            except ValueError:
-                reciprocal_ranks.append(0.0)
-        metrics["candidate_self_retrieval_top1_rate"] = top1_matches / len(corpus.document_row_ids)
-        metrics["candidate_self_retrieval_mrr10"] = float(np.mean(reciprocal_ranks))
-        for probe, neighbors in zip(corpus.queries, candidate_query_neighbors, strict=True):
-            locations = [artifacts.documents.documents[row_id].location for row_id in neighbors]
-            representative_results[probe.id] = locations
-        representative_probes = [probe for probe in corpus.queries if probe.expected_locations]
-        representative_passed = all(
-            any(
-                any(location.startswith(prefix) for prefix in probe.expected_locations)
-                for location in representative_results[probe.id]
-            )
-            for probe in representative_probes
+        metrics["candidate_self_retrieval_top1_rate"], metrics["candidate_self_retrieval_mrr10"] = (
+            _self_retrieval_metrics(search_index, values.candidate_documents, corpus.document_row_ids)
+        )
+        representative_results, representative_passed = _representative_results(
+            artifacts, corpus, candidate_query_neighbors
         )
         metric_checks = _metric_checks(metrics)
 
@@ -408,6 +547,8 @@ async def run_compatibility_check(
     passed = structural_passed and all(metric_checks.values()) and representative_passed
     return {
         "schema_version": COMPATIBILITY_SCHEMA_VERSION,
+        "mode": "parity",
+        "reference": "live_provider",
         "package_version": version("test-automation-sdk-mcp"),
         "artifact_hashes": _artifact_hashes(artifacts) if artifact_hashes is None else artifact_hashes,
         "corpus_sha256": corpus_sha256,
@@ -443,20 +584,55 @@ def _config_for(
     return runtime_config_from_environment(values)
 
 
+def _candidate_config(args: argparse.Namespace) -> RuntimeConfig:
+    values = dict(os.environ)
+    provider_name = values.get("TA_SDK_EMBEDDING_PROVIDER", EmbeddingProviderKind.OLLAMA.value).strip().lower()
+    if provider_name == EmbeddingProviderKind.OLLAMA.value:
+        if args.ollama_url is not None:
+            values["TA_SDK_OLLAMA_URL"] = args.ollama_url
+        if args.ollama_model is not None:
+            values["TA_SDK_OLLAMA_MODEL"] = args.ollama_model
+    elif provider_name == EmbeddingProviderKind.OPENAI.value:
+        if args.openai_url is not None:
+            values["TA_SDK_OPENAI_URL"] = args.openai_url
+        if args.openai_model is not None:
+            values["TA_SDK_OPENAI_MODEL"] = args.openai_model
+    return runtime_config_from_environment(values)
+
+
 async def _check_from_arguments(args: argparse.Namespace) -> dict[str, object]:
-    baseline_config = _config_for(
-        EmbeddingProviderKind.OLLAMA,
-        endpoint_url=args.ollama_url,
-        model=args.ollama_model,
-    )
-    candidate_config = _config_for(
-        EmbeddingProviderKind.OPENAI,
-        endpoint_url=args.openai_url,
-        model=args.openai_model,
-    )
-    baseline_provider = create_embedding_provider(baseline_config)
-    candidate_provider = create_embedding_provider(candidate_config)
+    providers: list[EmbeddingProvider] = []
     try:
+        if args.mode == "index":
+            candidate_provider = create_embedding_provider(_candidate_config(args))
+            providers.append(candidate_provider)
+            with packaged_artifact_paths() as paths:
+                artifacts = load_verified_artifacts(paths.directory)
+                artifact_hashes = _artifact_hashes(artifacts)
+                with packaged_probe_corpus() as loaded:
+                    raw_corpus, corpus = loaded
+                    return await run_index_compatibility_check(
+                        candidate_provider,
+                        artifacts,
+                        corpus,
+                        corpus_sha256=sha256(raw_corpus).hexdigest(),
+                        artifact_hashes=artifact_hashes,
+                    )
+
+        baseline_config = _config_for(
+            EmbeddingProviderKind.OLLAMA,
+            endpoint_url=args.ollama_url,
+            model=args.ollama_model,
+        )
+        candidate_config = _config_for(
+            EmbeddingProviderKind.OPENAI,
+            endpoint_url=args.openai_url,
+            model=args.openai_model,
+        )
+        baseline_provider = create_embedding_provider(baseline_config)
+        providers.append(baseline_provider)
+        candidate_provider = create_embedding_provider(candidate_config)
+        providers.append(candidate_provider)
         with packaged_artifact_paths() as paths:
             artifacts = load_verified_artifacts(paths.directory)
             artifact_hashes = _artifact_hashes(artifacts)
@@ -471,12 +647,18 @@ async def _check_from_arguments(args: argparse.Namespace) -> dict[str, object]:
                     artifact_hashes=artifact_hashes,
                 )
     finally:
-        for provider in (baseline_provider, candidate_provider):
+        for provider in reversed(providers):
             await provider.aclose()
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Compare Ollama and OpenAI-compatible embedding behavior.")
+    parser = argparse.ArgumentParser(description="Check embedding compatibility with an index or live provider parity.")
+    parser.add_argument(
+        "--mode",
+        choices=("index", "parity"),
+        default="index",
+        help="Compare the selected provider with the verified index, or compare two live providers.",
+    )
     parser.add_argument("--ollama-url", help="Override the non-secret Ollama base URL.")
     parser.add_argument("--ollama-model", help="Override the non-secret Ollama model.")
     parser.add_argument("--openai-url", help="Override the non-secret OpenAI embeddings URL.")
@@ -488,23 +670,37 @@ def _parser() -> argparse.ArgumentParser:
 def _human_summary(report: dict[str, object]) -> str:
     metrics = cast(dict[str, object], report["metrics"])
     status = "PASS" if report["passed"] else "ADVISORY FAIL"
-    return "\n".join(
-        [
-            f"embedding compatibility: {status}",
-            (
-                f"same-input cosine p5={metrics['same_input_cosine_p5']} "
-                f"pairwise-correlation={metrics['pairwise_cosine_correlation']}"
-            ),
-            (
-                f"query top-5 overlap={metrics['mean_top5_query_neighbor_overlap']} "
-                f"document top-10 overlap={metrics['mean_top10_document_neighborhood_overlap']}"
-            ),
-            (
-                f"candidate self-retrieval top-1={metrics['candidate_self_retrieval_top1_rate']} "
-                f"mrr@10={metrics['candidate_self_retrieval_mrr10']}"
-            ),
-        ]
+    lines = [f"embedding {report['mode']} compatibility: {status}"]
+    if report["mode"] == "index":
+        lines.extend(
+            [
+                "reference=verified_index",
+                (
+                    f"document same-input cosine p5={metrics['same_input_cosine_p5']} "
+                    f"pairwise-correlation={metrics['pairwise_cosine_correlation']}"
+                ),
+                f"document neighborhood overlap={metrics['mean_top10_document_neighborhood_overlap']}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "reference=live_provider",
+                (
+                    f"same-input cosine p5={metrics['same_input_cosine_p5']} "
+                    f"pairwise-correlation={metrics['pairwise_cosine_correlation']}"
+                ),
+                (
+                    f"query top-5 overlap={metrics['mean_top5_query_neighbor_overlap']} "
+                    f"document top-10 overlap={metrics['mean_top10_document_neighborhood_overlap']}"
+                ),
+            ]
+        )
+    lines.append(
+        f"candidate self-retrieval top-1={metrics['candidate_self_retrieval_top1_rate']} "
+        f"mrr@10={metrics['candidate_self_retrieval_mrr10']}"
     )
+    return "\n".join(lines)
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
@@ -529,12 +725,15 @@ def main(arguments: Sequence[str] | None = None) -> int:
 __all__ = [
     "COMPATIBILITY_SCHEMA_VERSION",
     "DEFAULT_DOCUMENT_SAMPLE_SIZE",
+    "INDEX_THRESHOLDS",
     "PROBE_CORPUS_FILENAME",
     "THRESHOLDS",
+    "ComparisonMode",
     "CompatibilityProbe",
     "ProbeCorpus",
     "load_probe_corpus",
     "main",
     "packaged_probe_corpus",
     "run_compatibility_check",
+    "run_index_compatibility_check",
 ]
