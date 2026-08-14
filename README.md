@@ -1,13 +1,20 @@
 # dSPACE Test Automation SDK MCP Server
 
-This Server provides the `retrieve_documentation` tool for the Test Automation SDK,
-backed by a committed FAISS index of the Test Automation SDK documentation.
+This server provides the `retrieve_documentation` tool for the Test Automation
+SDK, backed by a committed index of the Test Automation SDK documentation.
 
-## Prerequisites
+## Quick Start
+
+This chapter is for users who want to install the MCP server and connect it to
+an MCP client. For all environment variables, hosted endpoints, and provider
+details, see [Configuration](#configuration). For deployment and compatibility
+checks, see [Operations](#operations).
+
+### Prerequisites
 
 - Python 3.12, 3.13, or 3.14.
 - An Ollama-compatible or OpenAI-compatible embedding endpoint.
-- `uv` for development, index maintenance, and wheel verification.
+- `uv` for installing the published wheel or running the repository checkout.
 
 For a local Ollama installation, make sure the Ollama service is running and
 pull the pinned model:
@@ -16,17 +23,28 @@ pull the pinned model:
 ollama pull nomic-embed-text:v1.5
 ```
 
-The MCP server uses Ollama's `/api/embed` endpoin and connects directly to the configured service.
+### Choose an installation option
 
-The packaged index was built with Ollama and `nomic-embed-text:v1.5`. An OpenAI-compatible endpoint can query that same index, but compatibility is an
-operator responsibility ([Optional Compatibility Check](#optional-compatibility-check)).
+#### Option 1: Install the published wheel
 
-## Installation
+Download the release `*.whl` and install it as a globally callable `uv` tool:
 
-### Repository Checkout
+```sh
+uv tool install .\test_automation_sdk_mcp-0.1.0-py3-none-any.whl
+```
 
-The simplest development and local MCP setup is to clone the repository and
-let `uv` create and populate the project environment:
+On Linux or macOS:
+
+```sh
+uv tool install ./test_automation_sdk_mcp-0.1.0-py3-none-any.whl
+```
+
+If the command is not found after installation, add the `uv` tool executable
+directory reported by `uv tool update-shell` to `PATH`.
+
+#### Option 2: Clone the repository and run it with `uv`
+
+Clone the repository and create its environment:
 
 ```text
 git clone <repository-url>
@@ -34,79 +52,30 @@ cd TestAutomationSDKMCP
 uv sync
 ```
 
-On Windows, start the MCP server from the checkout with `SDKMCP.cmd`. On Linux
-or macOS, make `SDKMCP.sh` executable once and use it to start the MCP server:
+The repository includes launchers that run the server with the repository's
+environment. On Windows, use `SDKMCP.cmd`. On Linux or macOS, make
+`SDKMCP.sh` executable once and use it:
 
-```text
+```sh
+chmod +x SDKMCP.sh
 ./SDKMCP.sh
 ```
 
-Both launchers run `uv --directory` against the repository directory, so they
-work regardless of the caller's current working directory and forward all
-arguments to the MCP server. `uv` must be installed and available on `PATH`.
+The launchers find the repository relative to their own location, so they work
+regardless of the caller's current directory and forward arguments to the MCP
+server. When configuring an MCP client, use the absolute path to the launcher
+as its command:
 
-### Global Wheel Installation
+- Windows: `C:\\path\\to\\TestAutomationSDKMCP\\SDKMCP.cmd`
+- Linux/macOS: `/path/to/TestAutomationSDKMCP/SDKMCP.sh`
 
-For a user who does not want a repository checkout, download the release
-`*.whl` and install it as a globally callable `uv` tool:
+### Configure the MCP client
 
-```sh
-uv tool install .\test_automation_sdk_mcp-0.1.0-py3-none-any.whl
-test-automation-sdk-mcp
-```
-
-On Linux or macOS, use the downloaded wheel path in the same command:
-
-```text
-uv tool install ./test_automation_sdk_mcp-0.1.0-py3-none-any.whl
-test-automation-sdk-mcp
-```
-
-After installation, configure the MCP client to call
-`test-automation-sdk-mcp` directly. If the command is not found, add the `uv`
-tool executable directory reported by `uv tool update-shell` to `PATH`.
-
-The wheel contains the package code and these three generated artifacts:
-
-- `test_automation_sdk_mcp/db/TA_Docu.faiss`
-- `test_automation_sdk_mcp/db/TA_Docu.documents.json`
-- `test_automation_sdk_mcp/db/TA_Docu.manifest.json`
-
-The runtime discovers the default artifact set through
-`importlib.resources`. It does not use the current working directory. Set
-`TA_SDK_DB_DIR` only when selecting an alternate, fully validated artifact
-directory.
-
-### Release Assets and Checksums
-
-Pushing a tag matching `v*` runs the release workflow. Each GitHub release
-publishes the wheel, source `tar.gz`, a release zip, and `SHA256SUMS.txt`. The
-release zip contains the wheel, source archive, and `license.txt` generated
-from the project's installed dependencies.
-
-On Linux or macOS, download the release assets into the same directory and
-verify them with:
-
-```text
-sha256sum -c SHA256SUMS.txt
-```
-
-On Windows, calculate an individual asset's SHA-256 value with PowerShell:
-
-```powershell
-Get-FileHash .\test_automation_sdk_mcp-0.1.0-py3-none-any.whl -Algorithm SHA256
-```
-
-Compare the result with the corresponding entry in `SHA256SUMS.txt`.
-Checksums detect corruption or altered downloads; signed releases or artifact
-attestations are needed when publisher authenticity must also be verified.
-
-## MCP Client Configuration
-
-Configure an MCP client with the installed console script. The exact JSON
-location depends on the client. Choose one of these provider configurations.
-
-For the default local Ollama provider:
+Configure the client to call the command from the installation option you
+selected. The exact JSON location depends on the client. For a wheel
+installation, use `test-automation-sdk-mcp` directly. For a repository
+checkout, use the absolute path to `SDKMCP.cmd` or `SDKMCP.sh` described above.
+This is the default local Ollama configuration for a wheel installation:
 
 ```json
 {
@@ -123,31 +92,19 @@ For the default local Ollama provider:
 }
 ```
 
-For the verified local llama.cpp OpenAI-compatible endpoint:
+Restart or reload the MCP client and confirm that it lists one tool named
+`retrieve_documentation`. The packaged documentation index is included
+automatically and standard installations do not need `TA_SDK_DB_DIR`.
 
-```json
-{
-	"mcpServers": {
-		"test-automation-sdk": {
-			"command": "test-automation-sdk-mcp",
-			"args": [],
-			"env": {
-				"TA_SDK_EMBEDDING_PROVIDER": "openai",
-				"TA_SDK_OPENAI_URL": "http://127.0.0.1:8080/v1/embeddings",
-				"TA_SDK_OPENAI_MODEL": "nomic-embed-text-v1.5.Q8_0.gguf"
-			}
-		}
-	}
-}
-```
-
-For a repository checkout, use the absolute path to `SDKMCP.cmd` on Windows or
-`SDKMCP.sh` on Linux/macOS as the MCP command instead. For a wheel installed
-with `uv tool install`, use `test-automation-sdk-mcp` directly.
+For an OpenAI-compatible endpoint, use the configuration shown in
+[OpenAI-compatible providers](#openai-compatible-providers). For a checkout
+based setup, see [Repository checkout](#repository-checkout).
 
 ## Configuration
 
-All settings are read when the server or index builder starts:
+All settings are read when the server or index builder starts. The default
+configuration is suitable for a local Ollama service; most users only need to
+set the endpoint and model for their embedding service.
 
 | Variable                    | Default                  | Description                                                        |
 | --------------------------- | ------------------------ | ------------------------------------------------------------------ |
@@ -175,7 +132,9 @@ were built. Runtime does not reject a different provider or model; the operator
 owns the risk of incompatible pooling, normalization, task prefixes, model
 conversion, quantization, or backend settings.
 
-### Local Ollama
+### Ollama providers
+
+#### Local Ollama
 
 ```sh
 $env:TA_SDK_OLLAMA_URL = "http://127.0.0.1:11434"
@@ -184,7 +143,7 @@ ollama pull nomic-embed-text:v1.5
 test-automation-sdk-mcp
 ```
 
-### Centrally Hosted Ollama-Compatible Endpoint
+#### Centrally hosted Ollama-compatible endpoint
 
 ```sh
 $env:TA_SDK_OLLAMA_URL = "https://embeddings.example.test"
@@ -196,7 +155,9 @@ test-automation-sdk-mcp
 The endpoint must accept `POST /api/embed`, return the requested model name
 when supplied, and return one finite 768-value vector for each input.
 
-### Local OpenAI-Compatible Endpoint
+### OpenAI-compatible providers
+
+#### Local OpenAI-compatible endpoint
 
 The OpenAI-compatible URL is the complete embeddings endpoint. Set the model
 when the endpoint supports or requires explicit model selection:
@@ -212,7 +173,7 @@ The packaged Ollama-built index is used automatically; these provider settings
 are all that is required. If the endpoint always serves one active model, omit
 `TA_SDK_OPENAI_MODEL` and the request will omit its `model` field.
 
-### Authenticated Remote OpenAI-Compatible Endpoint
+#### Authenticated remote OpenAI-compatible endpoint
 
 ```sh
 $env:TA_SDK_EMBEDDING_PROVIDER = "openai"
@@ -226,9 +187,10 @@ If `TA_SDK_OPENAI_MODEL` is omitted, the model field is omitted from requests.
 If supplied, the provider may validate a returned response model against that
 request value, but neither form is compared with the packaged manifest.
 
-### Verified llama.cpp Reference
+#### Verified llama.cpp reference
 
-This measured configuration used the packaged Ollama-built index:
+This measured configuration used the packaged Ollama-built index and can be
+used as OpenAI-compatible endpoint instead of Ollama:
 
 ```sh
 llama-server `
@@ -250,7 +212,44 @@ overlap `0.98333`, and document top-10 neighborhood overlap `0.95781`. Values
 may vary slightly across backend versions; these results apply only to the
 tested model file and server settings.
 
-### Optional Compatibility Checks
+## Operations
+
+This chapter is for administrators and users operating a non-default provider
+or deployment. Runtime uses the packaged index and does not crawl documents or
+rebuild the index during startup.
+
+### Packaged and alternate index artifacts
+
+The wheel contains the package code and these three generated artifacts:
+
+- `test_automation_sdk_mcp/db/TA_Docu.faiss`
+- `test_automation_sdk_mcp/db/TA_Docu.documents.json`
+- `test_automation_sdk_mcp/db/TA_Docu.manifest.json`
+
+The default artifact set is loaded from the installed package rather than the
+current working directory. Set `TA_SDK_DB_DIR` only when selecting an
+alternate directory containing a complete, validated artifact set.
+
+### Release verification
+
+Download the release assets into the same directory and verify their checksums.
+On Linux or macOS:
+
+```text
+sha256sum -c SHA256SUMS.txt
+```
+
+On Windows, calculate an individual asset's SHA-256 value with PowerShell:
+
+```powershell
+Get-FileHash .\test_automation_sdk_mcp-0.1.0-py3-none-any.whl -Algorithm SHA256
+```
+
+Compare the result with the corresponding entry in `SHA256SUMS.txt`.
+Checksums detect corruption or altered downloads; signed releases or artifact
+attestations are needed when publisher authenticity must also be verified.
+
+### Embedding compatibility checks
 
 The compatibility command is advisory and has two explicit modes. The default
 `index` mode evaluates one configured candidate endpoint against the exact
@@ -294,7 +293,36 @@ still be tried after a failed result. JSON output identifies the mode and
 contains only safe metrics, hashes, thresholds, and sampled row IDs; it never
 contains endpoints, keys, request text, vectors, responses, or local paths.
 
-## Maintainer Index Rebuild
+## Development and Maintenance
+
+This chapter is for contributors and maintainers. Normal users do not need to
+clone the repository, rebuild the index, or run the test suite.
+
+### Repository checkout
+
+Clone the repository and let `uv` create and populate the project environment:
+
+```text
+git clone <repository-url>
+cd TestAutomationSDKMCP
+uv sync
+```
+
+On Windows, start the MCP server from the checkout with `SDKMCP.cmd`. On Linux
+or macOS, make `SDKMCP.sh` executable once and use it to start the MCP server:
+
+```text
+./SDKMCP.sh
+```
+
+Both launchers run `uv --directory` against the repository directory, so they
+work regardless of the caller's current working directory and forward all
+arguments to the MCP server. `uv` must be installed and available on `PATH`.
+
+When configuring an MCP client with a checkout, use the absolute path to
+`SDKMCP.cmd` on Windows or `SDKMCP.sh` on Linux/macOS as the MCP command.
+
+### Rebuild the documentation index
 
 Before rebuilding, obtain the latest generated HTML documentation export,
 including its `search.json`, and copy the complete tree into a new `data/`
@@ -329,7 +357,7 @@ One packaged Ollama-built database is used by both providers. A separately
 rebuilt index records its build provider and model as provenance, but runtime
 admission does not require those values to match the query provider.
 
-## Tests and Wheel Validation
+### Tests and wheel validation
 
 Run the non-network checks first, then the marked tests with local Ollama:
 
@@ -382,11 +410,18 @@ one tool, `retrieve_documentation`, while capturing stdout and confirming it
 contains no non-MCP text. Use the same clean environment and configure
 `TA_SDK_DB_DIR` only if testing an alternate artifact directory.
 
+### Release workflow
+
+Pushing a tag matching `v*` runs the release workflow. Each GitHub release
+publishes the wheel, source `tar.gz`, a release zip, and `SHA256SUMS.txt`. The
+release zip contains the wheel, source archive, and `license.txt` generated
+from the project's installed dependencies.
+
 ## Troubleshooting
 
-Expected `retrieve_documentation` failures are native MCP/JSON-RPC errors with
-JSON-RPC code `-32000`, a safe human-readable message, and this versioned
-`data` envelope:
+For expected retrieval failures, the server returns a native MCP/JSON-RPC
+error with JSON-RPC code `-32000`, a safe human-readable message, and this
+versioned `data` envelope:
 
 ```json
 {
