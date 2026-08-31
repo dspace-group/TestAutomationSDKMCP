@@ -79,16 +79,16 @@ This is the default local Ollama configuration for a wheel installation:
 
 ```json
 {
-	"mcpServers": {
-		"test-automation-sdk": {
-			"command": "test-automation-sdk-mcp",
-			"args": [],
-			"env": {
-				"TA_SDK_OLLAMA_URL": "http://127.0.0.1:11434",
-				"TA_SDK_OLLAMA_MODEL": "nomic-embed-text:v1.5"
-			}
-		}
-	}
+    "mcpServers": {
+        "test-automation-sdk": {
+            "command": "test-automation-sdk-mcp",
+            "args": [],
+            "env": {
+                "TA_SDK_OLLAMA_URL": "http://127.0.0.1:11434",
+                "TA_SDK_OLLAMA_MODEL": "nomic-embed-text:v1.5"
+            }
+        }
+    }
 }
 ```
 
@@ -194,15 +194,15 @@ used as OpenAI-compatible endpoint instead of Ollama:
 
 ```sh
 llama-server `
-	-m nomic-embed-text-v1.5.Q8_0.gguf `
-	--embedding `
-	--host 0.0.0.0 `
-	--port 8080 `
-	-c 8192 `
-	-b 8192 `
-	-ub 8192 `
-	--rope-scaling yarn `
-	--rope-freq-scale 0.75
+    -m nomic-embed-text-v1.5.Q8_0.gguf `
+    --embedding `
+    --host 0.0.0.0 `
+    --port 8080 `
+    -c 8192 `
+    -b 8192 `
+    -ub 8192 `
+    --rope-scaling yarn `
+    --rope-freq-scale 0.75
 ```
 
 On the committed 12-query and 128-document probe corpus, both endpoints
@@ -279,10 +279,10 @@ OpenAI-compatible endpoint:
 
 ```sh
 uv run test-automation-sdk-mcp-check-embedding-compatibility `
-	--mode parity `
-	--openai-url http://127.0.0.1:8080/v1/embeddings `
-	--openai-model nomic-embed-text-v1.5.Q8_0.gguf `
-	--json
+    --mode parity `
+    --openai-url http://127.0.0.1:8080/v1/embeddings `
+    --openai-model nomic-embed-text-v1.5.Q8_0.gguf `
+    --json
 ```
 
 Parity mode retains same-input cosine, pairwise geometry, query-neighbor
@@ -345,8 +345,8 @@ documentation or document embedding configuration changes:
 $env:TA_SDK_OLLAMA_URL = "http://127.0.0.1:11434"
 $env:TA_SDK_OLLAMA_MODEL = "nomic-embed-text:v1.5"
 uv run test-automation-sdk-mcp-build-index `
-	--source data `
-	--output src/test_automation_sdk_mcp/db
+    --source data `
+    --output src/test_automation_sdk_mcp/db
 ```
 
 The builder validates source coverage, chunks deterministically, embeds in
@@ -399,9 +399,9 @@ uv venv $releaseVenv
 uv pip install --python "$releaseVenv\Scripts\python.exe" $wheel
 Push-Location $env:TEMP
 try {
-	& "$releaseVenv\Scripts\python.exe" -c "from test_automation_sdk_mcp.index import load_packaged_artifacts; a = load_packaged_artifacts(); assert a.manifest.document_count == a.index.ntotal"
+    & "$releaseVenv\Scripts\python.exe" -c "from test_automation_sdk_mcp.index import load_packaged_artifacts; a = load_packaged_artifacts(); assert a.manifest.document_count == a.index.ntotal"
 } finally {
-	Pop-Location
+    Pop-Location
 }
 ```
 
@@ -425,10 +425,10 @@ versioned `data` envelope:
 
 ```json
 {
-	"schema_version": 1,
-	"code": "embedding_service_unavailable",
-	"classification": "transient",
-	"retryable": true
+    "schema_version": 1,
+    "code": "embedding_service_unavailable",
+    "classification": "transient",
+    "retryable": true
 }
 ```
 
@@ -454,31 +454,31 @@ are reported on stderr and are not MCP tool errors.
 - Set `TA_SDK_OLLAMA_URL` to the base URL, without `/api/embed`.
 - Confirm the endpoint is reachable and accepts the Ollama embed contract.
 - Increase `TA_SDK_CONNECT_TIMEOUT` or `TA_SDK_REQUEST_TIMEOUT` for a remote
-	service, within the supported 300-second maximum.
+    service, within the supported 300-second maximum.
 
 **Embedding compatibility**
 
 - The manifest provider and model are build provenance, not runtime admission
-	keys. A differing provider or model does not prevent startup.
+    keys. A differing provider or model does not prevent startup.
 - Run the optional compatibility checker when changing quantization, model
-	conversion, pooling, normalization, task prefixes, or backend settings.
+    conversion, pooling, normalization, task prefixes, or backend settings.
 - A failed advisory check does not block runtime, but it indicates retrieval
-	quality risk that the operator must accept or resolve.
+    quality risk that the operator must accept or resolve.
 
 **Dimension or response errors**
 
 - The configured embedding service must return finite vectors with exactly 768
-	values for this artifact set.
+    values for this artifact set.
 - Check the service response model, input count, and model installation. Do
-	not edit the FAISS or JSON files by hand.
+    not edit the FAISS or JSON files by hand.
 
 **Missing, mixed, or corrupted artifacts**
 
 - Keep `TA_Docu.faiss`, `TA_Docu.documents.json`, and
-	`TA_Docu.manifest.json` from the same builder run.
+    `TA_Docu.manifest.json` from the same builder run.
 - Check `TA_SDK_DB_DIR` for a typo and ensure all three files are readable.
 - The loader verifies manifest counts, FAISS type and dimension, document
-	counts, and artifact hashes before serving requests.
+    counts, and artifact hashes before serving requests.
 - The legacy root `db/TA_Docu.pkl` is not used and must not be packaged.
 
 **Unexpected console output**
@@ -486,3 +486,11 @@ are reported on stderr and are not MCP tool errors.
 MCP messages use stdout. Redirect diagnostics to stderr and ensure the client
 starts `test-automation-sdk-mcp` directly rather than through a wrapper that
 prints banners or progress text.
+
+## Support
+
+For technical questions and issues related to the dSPACE MCP Servers and related
+GitHub repositories, please open a GitHub issue.
+
+As a valued dSPACE customer, you are always welcome to contact dSPACE Support
+directly via http://www.dspace.com/go/supportrequest.
