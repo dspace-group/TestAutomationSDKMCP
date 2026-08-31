@@ -72,8 +72,10 @@ def test_clean_wheel_install_loads_artifacts_and_opens_stdio_session(tmp_path: P
 
             async def main() -> None:
                 module_path = Path(test_automation_sdk_mcp.__file__ or "").resolve()
-                virtual_environment = Path(sys.executable).resolve().parent.parent
-                assert module_path.is_relative_to(virtual_environment)
+                virtual_environment = Path(sys.executable).parent.parent.resolve()
+                assert module_path.is_relative_to(virtual_environment), (
+                    f"module_path={module_path}; virtual_environment={virtual_environment}"
+                )
 
                 artifacts = load_packaged_artifacts()
                 assert artifacts.manifest.document_count == len(artifacts.documents.documents)
@@ -108,12 +110,18 @@ def test_clean_wheel_install_loads_artifacts_and_opens_stdio_session(tmp_path: P
         encoding="utf-8",
     )
     environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
-    subprocess.run(
+    probe_result = subprocess.run(
         [str(python_executable), str(probe_path)],
         cwd=tmp_path,
         env=environment,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=300,
     )
+    if probe_result.returncode != 0:
+        pytest.fail(
+            f"clean wheel probe failed with exit code {probe_result.returncode}\n"
+            f"stdout:\n{probe_result.stdout}\n"
+            f"stderr:\n{probe_result.stderr}"
+        )
