@@ -16,11 +16,26 @@ checks, see [Operations](#operations).
 - An Ollama-compatible or OpenAI-compatible embedding endpoint.
 - `uv` for installing the published wheel or running the repository checkout.
 
+> [!CAUTION]
+> Both local Ollama setup options below download and run
+> `nomic-embed-text:v1.5` from Ollama. Third-party model artifacts may
+> introduce supply-chain, licensing, privacy, and security risks. Review and
+> approve the model source and terms according to your organization's policies
+> before proceeding.
+
 For a local Ollama installation, make sure the Ollama service is running and
 pull the pinned model:
 
 ```sh
 ollama pull nomic-embed-text:v1.5
+```
+
+Alternatively, the repository's Docker Compose configuration starts Ollama in
+a container and downloads the pinned model into a persistent Docker volume.
+From the repository root, run:
+
+```sh
+docker compose -f docker/compose.yaml up -d
 ```
 
 ### Choose an installation option
@@ -141,6 +156,24 @@ $env:TA_SDK_OLLAMA_URL = "http://127.0.0.1:11434"
 $env:TA_SDK_OLLAMA_MODEL = "nomic-embed-text:v1.5"
 ollama pull nomic-embed-text:v1.5
 test-automation-sdk-mcp
+```
+
+The Docker Compose setup publishes its Ollama endpoint on loopback at
+`http://127.0.0.1:11434` by default. If port `11434` is already in use, select
+another loopback port before starting the stack by setting the
+`TA_SDK_OLLAMA_PORT` environment variable:
+
+```powershell
+$env:TA_SDK_OLLAMA_PORT = "11435"
+docker compose -f docker/compose.yaml up -d
+```
+
+In that case, configure the MCP server with
+`TA_SDK_OLLAMA_URL=http://127.0.0.1:11435`. To stop Ollama and remove the
+containers and network while retaining the downloaded model volume, run:
+
+```sh
+docker compose -f docker/compose.yaml down
 ```
 
 #### Centrally hosted Ollama-compatible endpoint
